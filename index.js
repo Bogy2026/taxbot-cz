@@ -81,7 +81,7 @@ const T = {
     compareMethods:   '🧮 Porovnat metody',
     noIncome:         '📭 Zatím žádné příjmy. Přidej: `25000 faktura klient`',
     taxTitle:         (year) => `🧮 *Porovnání daní — odhad ${year}*\n`,
-    taxAnnual:        (amount) => `📈 Roční odhad: *${czk(amount)}*\n━━━━━━━━━━━━━━━━\n\n`,
+    taxAnnual:        (amount, m) => `📈 Roční odhad (z ${m} měs.): *${czk(amount)}*\n━━━━━━━━━━━━━━━━\n\n`,
     taxPausal:        (pv) => `1️⃣ *Paušální výdaje 60%*\n   Odvody: ${czk(pv.total)} | Sazba: ${pv.rate}%\n   💵 Čistý: *${czk(pv.net)}*\n\n`,
     taxFlat:          (pd, better) => `2️⃣ *Paušální daň* ${better}\n   ${czk(pd.monthly)}/měs → ${czk(pd.annual)}/rok\n   💵 Čistý: *${czk(pd.net)}* | Bez daňového přiznání!\n\n`,
     taxBetter:        '✅ Lepší!',
@@ -130,7 +130,7 @@ const T = {
     compareMethods:   '🧮 Compare methods',
     noIncome:         '📭 No income yet. Add: `25000 invoice client`',
     taxTitle:         (year) => `🧮 *Tax comparison — estimate ${year}*\n`,
-    taxAnnual:        (amount) => `📈 Annual estimate: *${czk(amount)}*\n━━━━━━━━━━━━━━━━\n\n`,
+    taxAnnual:        (amount, m) => `📈 Annual projection (${m}-month basis): *${czk(amount)}*\n━━━━━━━━━━━━━━━━\n\n`,
     taxPausal:        (pv) => `1️⃣ *Flat-rate expenses 60%*\n   Levies: ${czk(pv.total)} | Rate: ${pv.rate}%\n   💵 Net: *${czk(pv.net)}*\n\n`,
     taxFlat:          (pd, better) => `2️⃣ *Flat-rate tax* ${better}\n   ${czk(pd.monthly)}/mo → ${czk(pd.annual)}/yr\n   💵 Net: *${czk(pd.net)}* | No tax return needed!\n\n`,
     taxBetter:        '✅ Better!',
@@ -265,9 +265,15 @@ bot.on('message:text', async ctx => {
   }
 
   // 25000 description
-  const match = text.match(/^(\d[\d\s,.]*)(.*)/);
+  // Parse amounts like: 40000 / 40 000 / 40,000 / 40.000 (thousands sep) / 40.50 (decimal)
+  const numMatch = text.match(/^(\d[\d ]*(?:[,.]\d+)*)\s*(.*)/);
+  const match = numMatch; // keep variable name for compat
   if (match) {
-    const amount = parseFloat(match[1].replace(/\s/g, '').replace(',', '.'));
+    const raw = match[1].replace(/ /g, ''); // remove spaces: "40 000" -> "40000"
+    // Detect if comma/dot is thousands separator (followed by exactly 3 digits at end)
+    const amount = raw.match(/^\d+[,.]\d{3}$/)
+      ? parseFloat(raw.replace(/[,.]/g, ''))          // "40,000" or "40.000" -> 40000
+      : parseFloat(raw.replace(',', '.'));              // "40.50" or "40,50" -> 40.5
     const desc = match[2].trim() || t.incomeDefault;
     if (!isNaN(amount) && amount > 0) {
       await addIncome(ctx.from.id, amount, desc);
@@ -289,7 +295,7 @@ async function showSummary(ctx) {
   for (let m = 1; m <= month; m++) {
     const row = s.monthly.find(r => parseInt(r.month) === m);
     const total = row ? parseFloat(row.total) : 0;
-    const bars = Math.round((total / max) * 8);
+    const bars = total > 0 ? Math.max(1, Math.round((total / max) * 8)) : 0;
     chart += `${t.months[m].padEnd(4)} ${'█'.repeat(bars)}${'░'.repeat(8-bars)} ${czk(total)}\n`;
   }
   const tax = calcPausal(s.income);
@@ -320,7 +326,7 @@ async function showTax(ctx) {
   const pv = calcPausal(annual);
   const pd = calcPausalnlDan(annual);
 
-  let text = t.taxTitle(year) + t.taxAnnual(Math.round(annual)) + t.taxPausal(pv);
+  let text = t.taxTitle(year) + t.taxAnnual(Math.round(annual), month) + t.taxPausal(pv);
 
   if (pd) {
     const better = pd.net > pv.net ? t.taxBetter : '';
