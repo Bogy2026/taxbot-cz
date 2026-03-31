@@ -48,10 +48,83 @@ function calcPausalnlDan(income) {
 
 function czk(n) { return new Intl.NumberFormat('cs-CZ', { style: 'currency', currency: 'CZK', maximumFractionDigits: 0 }).format(n); }
 
+// ── Smart Parser ──────────────────────────────────────────────
+// Handles: "40000", "40 000", "40,000", "40.000" (thousands) and "40.50", "40,50" (decimals)
+function parseAmount(raw) {
+  const s = String(raw).replace(/\s/g, '');
+  return /^\d+[,.]\d{3}$/.test(s)
+    ? parseFloat(s.replace(/[,.]/g, ''))   // thousands sep → 40000
+    : parseFloat(s.replace(',', '.'));      // decimal → 40.50
+}
+
+/*
+ * detectIntent(text)
+ * Returns one of:
+ *   { type: 'km',      km, purpose }
+ *   { type: 'expense', amount, desc }
+ *   { type: 'income',  amount, desc }
+ *   { type: 'unknown' }
+ *
+ * Priority: km > expense keyword > number-first (income)
+ */
+function detectIntent(text) {
+  const lower = text.toLowerCase().trim();
+
+  // ── 1. KM detection ─────────────────────────────────────────
+  // Accepts: "150km", "150 km Brno", "km 150 Brno", "150km schůzka"
+  // Number-first with km suffix (the previously broken case!)
+  const kmSuffix = text.match(/^([\d][\d\s,.]*?)\s*km\b\s*(.*)/i);
+  if (kmSuffix) {
+    const km = parseAmount(kmSuffix[1]);
+    if (!isNaN(km) && km > 0) return { type: 'km', km, purpose: kmSuffix[2].trim() };
+  }
+  // km-first: "km 150 Brno"
+  const kmFirst = lower.match(/^km\s+([\d][\d\s,.]*)\s*(.*)/i);
+  if (kmFirst) {
+    const km = parseAmount(kmFirst[1]);
+    if (!isNaN(km) && km > 0) return { type: 'km', km, purpose: text.match(/^km\s+[\d][\d\s,.]*\s*(.*)/i)?.[1]?.trim() ?? '' };
+  }
+
+  // ── 2. EXPENSE keywords ──────────────────────────────────────
+  // Czech:   v, výdaj, vydaj, zaplatil/a, nakoupil/a
+  // English: expense, exp, e, spent, paid, cost, buy, bought
+  const expPrefixRe = /^(výdaj|vydaj|zaplatil[a]?|nakoupil[a]?|expense|exp|spent|paid|cost|bought|buy)\s+/i;
+  // Also catch "v " (single letter) only if followed by a digit (avoids matching "v pohodě")
+  const vPrefixRe = /^v\s+(\d)/i;
+
+  if (expPrefixRe.test(lower) || vPrefixRe.test(lower)) {
+    const withoutPrefix = text.replace(expPrefixRe, '').replace(/^v\s+/i, '');
+    const m = withoutPrefix.match(/^([\d][\d\s,.]*)\s*(.*)/);
+    if (m) {
+      const amount = parseAmount(m[1]);
+      const desc = m[2].trim();
+      if (!isNaN(amount) && amount > 0) return { type: 'expense', amount, desc };
+    }
+    return { type: 'expense_error' };
+  }
+
+  // ── 3. NUMBER-FIRST = income (default) ──────────────────────
+  // Handles: "25000 faktura Novák", "25,000 invoice Bol", "15 000 pronájem"
+  const numMatch = text.match(/^([\d][\d\s]*(?:[,.]\d+)?)\s*(.*)/);
+  if (numMatch) {
+    const amount = parseAmount(numMatch[1]);
+    const desc = numMatch[2].trim();
+    if (!isNaN(amount) && amount > 0) return { type: 'income', amount, desc };
+  }
+
+  return { type: 'unknown' };
+}
+
 // ── Translations ──────────────────────────────────────────────
 const T = {
   cs: {
-    welcome: (name) => `👋 Ahoj ${name}!\n\nJsem tvůj daňový pomocník 🇨🇿\n\n• Sleduji příjmy a výdaje\n• Spočítám daně a odvody\n• Porovnám paušál vs. paušální daň\n\nJak přidat příjem? Prostě napiš:\n\`25000 faktura Novák s.r.o.\``,
+    welcome: (name) =>
+      `👋 Ahoj ${name}! Jsem tvůj daňový pomocník 🇨🇿\n\n` +
+      `Prostě piš přirozeně:\n\n` +
+      `💰 *Příjem:* \`25000 faktura Novák\`\n` +
+      `🧾 *Výdaj:* \`výdaj 4900 notebook\` nebo \`zaplatil 4900 notebook\`\n` +
+      `🚗 *Kilometry:* \`150km Brno\` nebo \`km 150 Brno\`\n\n` +
+      `Také počítám daně a porovnám paušál vs. paušální daň.`,
     menu: {
       income:   '💰 Přidat příjem',
       expense:  '🧾 Přidat výdaj',
@@ -61,18 +134,23 @@ const T = {
       help:     '❓ Nápověda',
       lang:     '🇬🇧 English',
     },
-    addIncomePrompt:  '💰 Napiš: `25000 faktura Novák s.r.o.`',
-    addExpensePrompt: '🧾 Napiš: `v 4900 notebook`',
-    addKmPrompt:      '🚗 Napiš: `km 150 schůzka Brno`',
-    kmError:          '❌ Zkus: `km 120 cesta Praha`',
-    kmSaved:          (km, purpose) => `✅ *${km} km* — ${purpose}`,
+    addIncomePrompt:  '💰 Napiš částku a popis:\n`25000 faktura Novák s.r.o.`\n`15 000 pronájem`',
+    addExpensePrompt: '🧾 Začni s výdaj / zaplatil / nakoupil:\n`výdaj 4900 notebook`\n`zaplatil 800 benzin`',
+    addKmPrompt:      '🚗 Jakýkoliv z těchto formátů:\n`150km Brno`\n`km 150 schůzka Brno`',
+    kmError:          '❌ Km jsem nenašel. Zkus:\n`150km Brno` nebo `km 150 cesta Praha`',
+    kmSaved:          (km, purpose) => `✅ *${km} km* zapsáno${purpose ? ` — ${purpose}` : ''}`,
     kmDefault:        'pracovní cesta',
-    expenseError:     '❌ Zkus: `v 3500 telefon`',
+    expenseError:     '❌ Zkus: `výdaj 3500 telefon` nebo `zaplatil 800 benzin`',
     expenseDefault:   'výdaj',
-    expenseSaved:     (amount, desc) => `✅ Výdaj: *${czk(amount)}* — ${desc}`,
-    incomeSaved:      (amount, desc) => `✅ Příjem: *${czk(amount)}*\n📝 ${desc}`,
+    expenseSaved:     (amount, desc) => `🧾 Výdaj: *${czk(amount)}*${desc ? ` — ${desc}` : ''}`,
+    incomeSaved:      (amount, desc) => `💰 Příjem: *${czk(amount)}*${desc ? `\n📝 ${desc}` : ''}`,
     incomeDefault:    'příjem',
-    unknown:          'Nerozumím 🤔 Zkus /help',
+    wasExpense:       '↩️ Byl to výdaj?',
+    wasIncome:        '↩️ Byl to příjem?',
+    correctedToExp:   (amount, desc) => `✅ Opraveno → 🧾 Výdaj: *${czk(amount)}*${desc ? ` — ${desc}` : ''}`,
+    correctedToInc:   (amount, desc) => `✅ Opraveno → 💰 Příjem: *${czk(amount)}*${desc ? ` — ${desc}` : ''}`,
+    unknown:
+      '🤔 Nerozumím. Zkus:\n`25000 faktura klient`\n`výdaj 800 benzin`\n`150km Brno`',
     summaryTitle:     (year) => `📊 *Přehled ${year}*\n━━━━━━━━━━━━━━━━\n`,
     summaryIncome:    (total, count) => `💰 Příjmy: *${czk(total)}* (${count} faktur)\n`,
     summaryExpenses:  (total) => `🧾 Výdaje: *${czk(total)}*\n\n`,
@@ -91,16 +169,22 @@ const T = {
     taxWarning:       '⚠️ Odhad. Poraď se s účetní/m.',
     helpText:
       `❓ *Jak mě používat*\n\n` +
-      `*Příjem:*\n\`25000 faktura Novák s.r.o.\`\n\n` +
-      `*Výdaj:*\n\`v 4900 notebook\`\n\n` +
-      `*Kilometry:*\n\`km 150 schůzka Brno\`\n\n` +
+      `*Příjem* — číslo a popis:\n\`25000 faktura Novák s.r.o.\`\n\`15 000 pronájem\`\n\n` +
+      `*Výdaj* — začni klíčovým slovem:\n\`výdaj 4900 notebook\`\n\`zaplatil 800 benzin\`\n\`nakoupil 300 kancelářské potřeby\`\n\n` +
+      `*Kilometry* — číslo+km nebo km+číslo:\n\`150km Brno\`\n\`km 150 schůzka Praha\`\n\n` +
       `*Příkazy:*\n/prehled — přehled\n/dane — daně\n/start — menu\n\n` +
-      `📌 Tvá data jsou pouze tvoje. Nesdílíme nic.`,
+      `📌 Tvá data jsou pouze tvoje.`,
     months: ['','Led','Úno','Bře','Dub','Kvě','Čvn','Čvc','Srp','Zář','Říj','Lis','Pro'],
     langChanged: '🇨🇿 Jazyk nastaven na češtinu.',
   },
   en: {
-    welcome: (name) => `👋 Hi ${name}!\n\nI'm your Czech tax assistant 🇨🇿\n\n• I track your income & expenses\n• I calculate taxes and levies\n• I compare flat-rate expenses vs. flat-rate tax\n\nTo add income, just write:\n\`25000 invoice Novák s.r.o.\``,
+    welcome: (name) =>
+      `👋 Hi ${name}! I'm your Czech tax assistant 🇨🇿\n\n` +
+      `Just write naturally:\n\n` +
+      `💰 *Income:* \`25000 invoice Novák\`\n` +
+      `🧾 *Expense:* \`expense 4900 laptop\` or \`spent 800 gas\`\n` +
+      `🚗 *Mileage:* \`150km Brno\` or \`km 150 Brno\`\n\n` +
+      `I also calculate taxes and compare flat-rate options.`,
     menu: {
       income:   '💰 Add income',
       expense:  '🧾 Add expense',
@@ -110,18 +194,23 @@ const T = {
       help:     '❓ Help',
       lang:     '🇨🇿 Čeština',
     },
-    addIncomePrompt:  '💰 Write: `25000 invoice Novák s.r.o.`',
-    addExpensePrompt: '🧾 Write: `v 4900 laptop`',
-    addKmPrompt:      '🚗 Write: `km 150 meeting Brno`',
-    kmError:          '❌ Try: `km 120 trip Prague`',
-    kmSaved:          (km, purpose) => `✅ *${km} km* — ${purpose}`,
+    addIncomePrompt:  '💰 Write amount and description:\n`25000 invoice Novák s.r.o.`\n`15000 rent`',
+    addExpensePrompt: '🧾 Start with expense / spent / paid:\n`expense 4900 laptop`\n`spent 800 gas`',
+    addKmPrompt:      '🚗 Any of these formats:\n`150km Brno`\n`km 150 meeting Brno`',
+    kmError:          '❌ No km found. Try:\n`150km Brno` or `km 150 trip Prague`',
+    kmSaved:          (km, purpose) => `✅ *${km} km* logged${purpose ? ` — ${purpose}` : ''}`,
     kmDefault:        'business trip',
-    expenseError:     '❌ Try: `v 3500 phone`',
+    expenseError:     '❌ Try: `expense 3500 phone` or `spent 800 gas`',
     expenseDefault:   'expense',
-    expenseSaved:     (amount, desc) => `✅ Expense: *${czk(amount)}* — ${desc}`,
-    incomeSaved:      (amount, desc) => `✅ Income: *${czk(amount)}*\n📝 ${desc}`,
+    expenseSaved:     (amount, desc) => `🧾 Expense: *${czk(amount)}*${desc ? ` — ${desc}` : ''}`,
+    incomeSaved:      (amount, desc) => `💰 Income: *${czk(amount)}*${desc ? `\n📝 ${desc}` : ''}`,
     incomeDefault:    'income',
-    unknown:          "I don't understand 🤔 Try /help",
+    wasExpense:       '↩️ Was this an expense?',
+    wasIncome:        '↩️ Was this income?',
+    correctedToExp:   (amount, desc) => `✅ Fixed → 🧾 Expense: *${czk(amount)}*${desc ? ` — ${desc}` : ''}`,
+    correctedToInc:   (amount, desc) => `✅ Fixed → 💰 Income: *${czk(amount)}*${desc ? ` — ${desc}` : ''}`,
+    unknown:
+      "🤔 I didn't get that. Try:\n`25000 invoice client`\n`expense 800 gas`\n`150km Brno`",
     summaryTitle:     (year) => `📊 *Summary ${year}*\n━━━━━━━━━━━━━━━━\n`,
     summaryIncome:    (total, count) => `💰 Income: *${czk(total)}* (${count} invoices)\n`,
     summaryExpenses:  (total) => `🧾 Expenses: *${czk(total)}*\n\n`,
@@ -140,11 +229,11 @@ const T = {
     taxWarning:       '⚠️ Estimate only. Consult an accountant.',
     helpText:
       `❓ *How to use me*\n\n` +
-      `*Income:*\n\`25000 invoice Novák s.r.o.\`\n\n` +
-      `*Expense:*\n\`v 4900 laptop\`\n\n` +
-      `*Mileage:*\n\`km 150 meeting Brno\`\n\n` +
+      `*Income* — number and description:\n\`25000 invoice Novák s.r.o.\`\n\`15000 rent\`\n\n` +
+      `*Expense* — start with a keyword:\n\`expense 4900 laptop\`\n\`spent 800 gas\`\n\`paid 300 stationery\`\n\n` +
+      `*Mileage* — number+km or km+number:\n\`150km Brno\`\n\`km 150 meeting Prague\`\n\n` +
       `*Commands:*\n/prehled — summary\n/dane — taxes\n/start — menu\n\n` +
-      `📌 Your data is yours only. We share nothing.`,
+      `📌 Your data is yours only.`,
     months: ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'],
     langChanged: '🇬🇧 Language set to English.',
   }
@@ -163,12 +252,28 @@ async function upsertUser(tg) {
 
 async function addIncome(tgId, amount, desc) {
   const u = await upsertUser({ id: tgId });
-  await query(`INSERT INTO income (user_id, amount, description, date) VALUES ($1,$2,$3,NOW())`, [u.id, amount, desc]);
+  const { rows } = await query(
+    `INSERT INTO income (user_id, amount, description, date) VALUES ($1,$2,$3,NOW()) RETURNING id`,
+    [u.id, amount, desc]
+  );
+  return rows[0].id;
 }
 
 async function addExpense(tgId, amount, desc) {
   const u = await upsertUser({ id: tgId });
-  await query(`INSERT INTO expenses (user_id, amount, description, date) VALUES ($1,$2,$3,NOW())`, [u.id, amount, desc]);
+  const { rows } = await query(
+    `INSERT INTO expenses (user_id, amount, description, date) VALUES ($1,$2,$3,NOW()) RETURNING id`,
+    [u.id, amount, desc]
+  );
+  return rows[0].id;
+}
+
+async function deleteIncomeById(id) {
+  await query(`DELETE FROM income WHERE id=$1`, [id]);
+}
+
+async function deleteExpenseById(id) {
+  await query(`DELETE FROM expenses WHERE id=$1`, [id]);
 }
 
 async function addMileage(tgId, km, purpose) {
@@ -195,7 +300,8 @@ async function getSummary(tgId) {
 
 // ── Bot ───────────────────────────────────────────────────────
 const bot = new Bot(process.env.BOT_TOKEN);
-bot.use(session({ initial: () => ({ lang: 'cs' }) }));
+// Session stores: lang, lastEntry { type, id, amount, desc }
+bot.use(session({ initial: () => ({ lang: 'cs', lastEntry: null }) }));
 
 const getLang = (ctx) => ctx.session?.lang || 'cs';
 
@@ -211,17 +317,26 @@ const mainMenu = (lang) => {
     .text(m.lang,     'toggle_lang');
 };
 
+// Inline keyboard shown after saving income (quick-fix button)
+const incomeKeyboard = (lang) =>
+  new InlineKeyboard().text(T[lang].wasExpense, 'fix_to_expense');
+
+// Inline keyboard shown after saving expense (quick-fix button)
+const expenseKeyboard = (lang) =>
+  new InlineKeyboard().text(T[lang].wasIncome, 'fix_to_income');
+
+// ── Commands ──────────────────────────────────────────────────
 bot.command('start', async ctx => {
   await upsertUser(ctx.from);
   const lang = getLang(ctx);
-  const t = T[lang];
-  await ctx.reply(t.welcome(ctx.from.first_name), { parse_mode: 'Markdown', reply_markup: mainMenu(lang) });
+  await ctx.reply(T[lang].welcome(ctx.from.first_name), { parse_mode: 'Markdown', reply_markup: mainMenu(lang) });
 });
 
 bot.command('prehled', showSummary);
 bot.command('dane',    showTax);
 bot.command('help',    showHelp);
 
+// ── Callback queries ──────────────────────────────────────────
 bot.callbackQuery('summary',     ctx => { ctx.answerCallbackQuery(); showSummary(ctx); });
 bot.callbackQuery('calc_tax',    ctx => { ctx.answerCallbackQuery(); showTax(ctx); });
 bot.callbackQuery('help',        ctx => { ctx.answerCallbackQuery(); showHelp(ctx); });
@@ -231,59 +346,83 @@ bot.callbackQuery('add_km',      ctx => { ctx.answerCallbackQuery(); ctx.reply(T
 
 bot.callbackQuery('toggle_lang', async ctx => {
   await ctx.answerCallbackQuery();
-  const current = getLang(ctx);
-  const next = current === 'cs' ? 'en' : 'cs';
+  const next = getLang(ctx) === 'cs' ? 'en' : 'cs';
   ctx.session.lang = next;
   await ctx.reply(T[next].langChanged, { reply_markup: mainMenu(next) });
 });
 
+// Quick-fix: user said "↩️ Was this an expense?" after income was saved
+bot.callbackQuery('fix_to_expense', async ctx => {
+  await ctx.answerCallbackQuery();
+  const lang = getLang(ctx);
+  const t = T[lang];
+  const last = ctx.session.lastEntry;
+  if (!last || last.type !== 'income') return ctx.reply('❌ Nothing to fix.');
+  // Delete the income row, add expense row
+  await deleteIncomeById(last.id);
+  const newId = await addExpense(ctx.from.id, last.amount, last.desc);
+  ctx.session.lastEntry = { type: 'expense', id: newId, amount: last.amount, desc: last.desc };
+  await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard() }); // remove the button
+  await ctx.reply(t.correctedToExp(last.amount, last.desc), { parse_mode: 'Markdown' });
+});
+
+// Quick-fix: user said "↩️ Was this income?" after expense was saved
+bot.callbackQuery('fix_to_income', async ctx => {
+  await ctx.answerCallbackQuery();
+  const lang = getLang(ctx);
+  const t = T[lang];
+  const last = ctx.session.lastEntry;
+  if (!last || last.type !== 'expense') return ctx.reply('❌ Nothing to fix.');
+  await deleteExpenseById(last.id);
+  const newId = await addIncome(ctx.from.id, last.amount, last.desc);
+  ctx.session.lastEntry = { type: 'income', id: newId, amount: last.amount, desc: last.desc };
+  await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard() });
+  await ctx.reply(t.correctedToInc(last.amount, last.desc), { parse_mode: 'Markdown' });
+});
+
+// ── Main message handler ───────────────────────────────────────
 bot.on('message:text', async ctx => {
   const text = ctx.message.text.trim();
   if (text.startsWith('/')) return;
-  const lower = text.toLowerCase();
+
   const lang = getLang(ctx);
   const t = T[lang];
+  const intent = detectIntent(text);
 
-  // km 120 purpose
-  if (lower.startsWith('km ')) {
-    const parts = text.split(' ');
-    const km = parseFloat(parts[1]);
-    if (isNaN(km)) return ctx.reply(t.kmError, { parse_mode: 'Markdown' });
-    const purpose = parts.slice(2).join(' ') || t.kmDefault;
-    await addMileage(ctx.from.id, km, purpose);
-    return ctx.reply(t.kmSaved(km, purpose), { parse_mode: 'Markdown' });
+  if (intent.type === 'km') {
+    const purpose = intent.purpose || t.kmDefault;
+    await addMileage(ctx.from.id, intent.km, purpose);
+    return ctx.reply(t.kmSaved(intent.km, purpose), { parse_mode: 'Markdown' });
   }
 
-  // v 3500 expense
-  if (lower.startsWith('v ') || lower.startsWith('výdaj ')) {
-    const parts = text.split(' ');
-    const amount = parseFloat(parts[1].replace(',', '.'));
-    if (isNaN(amount)) return ctx.reply(t.expenseError, { parse_mode: 'Markdown' });
-    const desc = parts.slice(2).join(' ') || t.expenseDefault;
-    await addExpense(ctx.from.id, amount, desc);
-    return ctx.reply(t.expenseSaved(amount, desc), { parse_mode: 'Markdown' });
+  if (intent.type === 'expense_error') {
+    return ctx.reply(t.expenseError, { parse_mode: 'Markdown' });
   }
 
-  // 25000 description
-  // Parse amounts like: 40000 / 40 000 / 40,000 / 40.000 (thousands sep) / 40.50 (decimal)
-  const numMatch = text.match(/^(\d[\d ]*(?:[,.]\d+)*)\s*(.*)/);
-  const match = numMatch; // keep variable name for compat
-  if (match) {
-    const raw = match[1].replace(/ /g, ''); // remove spaces: "40 000" -> "40000"
-    // Detect if comma/dot is thousands separator (followed by exactly 3 digits at end)
-    const amount = raw.match(/^\d+[,.]\d{3}$/)
-      ? parseFloat(raw.replace(/[,.]/g, ''))          // "40,000" or "40.000" -> 40000
-      : parseFloat(raw.replace(',', '.'));              // "40.50" or "40,50" -> 40.5
-    const desc = match[2].trim() || t.incomeDefault;
-    if (!isNaN(amount) && amount > 0) {
-      await addIncome(ctx.from.id, amount, desc);
-      return ctx.reply(t.incomeSaved(amount, desc), { parse_mode: 'Markdown' });
-    }
+  if (intent.type === 'expense') {
+    const desc = intent.desc || t.expenseDefault;
+    const id = await addExpense(ctx.from.id, intent.amount, desc);
+    ctx.session.lastEntry = { type: 'expense', id, amount: intent.amount, desc };
+    return ctx.reply(
+      t.expenseSaved(intent.amount, desc),
+      { parse_mode: 'Markdown', reply_markup: expenseKeyboard(lang) }
+    );
   }
 
-  ctx.reply(t.unknown);
+  if (intent.type === 'income') {
+    const desc = intent.desc || t.incomeDefault;
+    const id = await addIncome(ctx.from.id, intent.amount, desc);
+    ctx.session.lastEntry = { type: 'income', id, amount: intent.amount, desc };
+    return ctx.reply(
+      t.incomeSaved(intent.amount, desc),
+      { parse_mode: 'Markdown', reply_markup: incomeKeyboard(lang) }
+    );
+  }
+
+  ctx.reply(t.unknown, { parse_mode: 'Markdown' });
 });
 
+// ── Show functions ────────────────────────────────────────────
 async function showSummary(ctx) {
   const lang = getLang(ctx);
   const t = T[lang];
@@ -327,7 +466,6 @@ async function showTax(ctx) {
   const pd = calcPausalnlDan(annual);
 
   let text = t.taxTitle(year) + t.taxAnnual(Math.round(annual), month) + t.taxPausal(pv);
-
   if (pd) {
     const better = pd.net > pv.net ? t.taxBetter : '';
     text += t.taxFlat(pd, better);
@@ -336,7 +474,6 @@ async function showTax(ctx) {
     text += t.taxWinner(bestMethod, savings);
   }
   text += t.taxWarning;
-
   await ctx.reply(text, { parse_mode: 'Markdown' });
 }
 
