@@ -259,64 +259,169 @@ function parseAmount(raw) {
     : parseFloat(s.replace(',', '.'));
 }
 
+/**
+ * extractAmountAndDesc(text)
+ * Flexibly finds a number ANYWHERE in the text.
+ * "15000 Wolt payment"  → { amount: 15000, desc: "Wolt payment" }
+ * "Wolt payment 15000"  → { amount: 15000, desc: "Wolt payment" }
+ * "laptop 4900 Dell"    → { amount: 4900, desc: "laptop Dell" }
+ * "25000"               → { amount: 25000, desc: "" }
+ * Returns { amount, desc } or null
+ */
+function extractAmountAndDesc(text) {
+  // Strip common prefixes that aren't part of the description
+  const stripped = text.replace(/^(vydaj[e]?|zaplatil[a]?|nakoupil[a]?|expense|exp|spent|paid|cost|bought|buy|income|prijem|invoice|faktura)\s+/i, '');
+
+  // Try 1: number at the start
+  const startMatch = stripped.match(/^([\d][\d\s]*(?:[,.]\d+)?)\s*(.*)/);
+  if (startMatch) {
+    const amount = parseAmount(startMatch[1]);
+    if (!isNaN(amount) && amount > 0) {
+      return { amount, desc: startMatch[2].trim() };
+    }
+  }
+
+  // Try 2: number at the end
+  const endMatch = stripped.match(/^(.*?)\s+([\d][\d\s]*(?:[,.]\d+)?)\s*$/);
+  if (endMatch) {
+    const amount = parseAmount(endMatch[2]);
+    if (!isNaN(amount) && amount > 0) {
+      return { amount, desc: endMatch[1].trim() };
+    }
+  }
+
+  // Try 3: number in the middle (grab the largest number-looking token)
+  const allNums = [...stripped.matchAll(/([\d][\d\s,.]*\d|\d+)/g)];
+  if (allNums.length > 0) {
+    // Pick the match that looks most like an amount (largest value)
+    let bestAmount = 0, bestMatch = null;
+    for (const m of allNums) {
+      const val = parseAmount(m[1]);
+      if (!isNaN(val) && val > bestAmount) {
+        bestAmount = val;
+        bestMatch = m;
+      }
+    }
+    if (bestMatch && bestAmount > 0) {
+      const desc = (stripped.slice(0, bestMatch.index) + ' ' + stripped.slice(bestMatch.index + bestMatch[0].length))
+        .replace(/\s+/g, ' ').trim();
+      return { amount: bestAmount, desc };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * extractKmAndDesc(text)
+ * Flexibly finds km value from text like:
+ * "150 Brno", "150km Brno", "Brno 150", "schůzka 150 km"
+ */
+function extractKmAndDesc(text) {
+  // Try: number + optional "km" anywhere
+  const kmMatch = text.match(/([\d][\d\s,.]*?)\s*(?:km)?\b/i);
+  if (kmMatch) {
+    const km = parseAmount(kmMatch[1]);
+    if (!isNaN(km) && km > 0 && km < 100000) { // sanity check on km
+      const desc = (text.slice(0, kmMatch.index) + ' ' + text.slice(kmMatch.index + kmMatch[0].length))
+        .replace(/\s*(km)\s*/gi, ' ')
+        .replace(/\s+/g, ' ').trim();
+      return { km, desc };
+    }
+  }
+  return null;
+}
+
 function detectIntent(text) {
   const dateParsed = parseDate(text);
   const clean = dateParsed ? dateParsed.clean : text;
   const date = dateParsed ? makeDate(dateParsed.day, dateParsed.month, dateParsed.year) : null;
   const dateLabel = dateParsed ? formatDateLabel(dateParsed) : null;
-  const lower = clean.toLowerCase().trim();
+  const lower = clean.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
 
-  // ── KM ──
-  const kmSuffix = clean.match(/^([\d][\d\s,.]*?)\s*km\b\s*(.*)/i);
-  if (kmSuffix) {
-    const km = parseAmount(kmSuffix[1]);
-    if (!isNaN(km) && km > 0) return { type: 'km', km, purpose: kmSuffix[2].trim(), date, dateLabel };
-  }
-  const kmFirst = clean.match(/^km\s+([\d][\d\s,.]*)\s*(.*)/i);
-  if (kmFirst) {
-    const km = parseAmount(kmFirst[1]);
-    if (!isNaN(km) && km > 0) return { type: 'km', km, purpose: kmFirst[2].trim(), date, dateLabel };
+  // ═══ STEP 1: Detect type by keyword ANYWHERE in text ═══
+
+  const KM_WORDS = /\bkm\b/i;
+  const KM_GLUED = /\d\s*km\b/i;  // "150km" or "150 km" — digit followed by km
+  const EXP_WORDS = /\b(vydaj[e]?|zaplatil[a]?|nakoupil[a]?|expense|exp|spent|paid|cost|bought|buy|utraceno|utratil[a]?|naklad)\b/i;
+  const INC_WORDS = /\b(income|prijem|prijmy|faktura|invoice)\b/i;
+
+  const hasKm  = KM_WORDS.test(lower) || KM_GLUED.test(lower);
+  const hasExp = EXP_WORDS.test(lower);
+  const hasInc = INC_WORDS.test(lower);
+
+  // ═══ STEP 2: Strip ALL keywords from text to isolate amount + description ═══
+
+  function stripKeywords(txt) {
+    return txt
+      .replace(/\b(vydaj[e]?|zaplatil[a]?|nakoupil[a]?|expense|exp|spent|paid|cost|bought|buy|utraceno|utratil[a]?|naklad)\b/gi, '')
+      .replace(/\b(income|prijem|prijmy|faktura|invoice)\b/gi, '')
+      .replace(/(\d)\s*km\b/gi, '$1')  // "150km" → "150", "150 km" → "150"
+      .replace(/\bkm\s+/gi, '')        // standalone "km 150" → "150"
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
-  // ── Expense keywords (prefix) ──
-  const expPrefixRe = /^(vydaj[e]?|zaplatil[a]?|nakoupil[a]?|expense|exp|spent|paid|cost|bought|buy|utraceno|utratil[a]?|naklad|v)\s+/i;
-  if (expPrefixRe.test(lower)) {
-    const withoutPrefix = clean.replace(/^(vydaj[e]?|zaplatil[a]?|nakoupil[a]?|expense|exp|spent|paid|cost|bought|buy|utraceno|utratil[a]?|naklad|v)\s+/i, '');
-    const m = withoutPrefix.match(/^([\d][\d\s,.]*)\s*(.*)/);
-    if (m) {
-      const amount = parseAmount(m[1]);
-      if (!isNaN(amount) && amount > 0) return { type: 'expense', amount, desc: m[2].trim(), date, dateLabel };
+  // ═══ STEP 3: KM mode — "km" found anywhere ═══
+
+  if (hasKm) {
+    // Strip "km" and keywords, then find number + desc
+    const stripped = stripKeywords(clean);
+    const extracted = extractAmountAndDesc(stripped);
+    if (extracted && extracted.amount > 0 && extracted.amount < 100000) {
+      return { type: 'km', km: extracted.amount, purpose: extracted.desc, date, dateLabel };
+    }
+    // Also try: bare "150km" glued together
+    const gluedMatch = clean.match(/([\d][\d\s,.]*?)\s*km/i);
+    if (gluedMatch) {
+      const km = parseAmount(gluedMatch[1]);
+      if (!isNaN(km) && km > 0) {
+        const rest = clean.replace(gluedMatch[0], '').replace(/\s+/g, ' ').trim();
+        return { type: 'km', km, purpose: rest, date, dateLabel };
+      }
+    }
+    return { type: 'km_error' };
+  }
+
+  // ═══ STEP 4: Expense mode — expense keyword found anywhere ═══
+
+  if (hasExp && !hasInc) {
+    const stripped = stripKeywords(clean);
+    const extracted = extractAmountAndDesc(stripped);
+    if (extracted && extracted.amount > 0) {
+      return { type: 'expense', amount: extracted.amount, desc: extracted.desc, date, dateLabel };
     }
     return { type: 'expense_error' };
   }
 
-  // ── Expense keywords (suffix): "4900 laptop expense" or "4900 notebook vydaj" ──
-  const expSuffixRe = /\b(vydaj[e]?|expense|naklad)\s*$/i;
-  if (expSuffixRe.test(lower)) {
-    const withoutSuffix = clean.replace(/\s*(vydaj[e]?|expense|naklad)\s*$/i, '').trim();
-    const m = withoutSuffix.match(/^([\d][\d\s,.]*)\s*(.*)/);
-    if (m) {
-      const amount = parseAmount(m[1]);
-      if (!isNaN(amount) && amount > 0) return { type: 'expense', amount, desc: m[2].trim(), date, dateLabel };
+  // ═══ STEP 5: Income mode — income keyword found anywhere ═══
+
+  if (hasInc && !hasExp) {
+    const stripped = stripKeywords(clean);
+    const extracted = extractAmountAndDesc(stripped);
+    if (extracted && extracted.amount > 0) {
+      return { type: 'income', amount: extracted.amount, desc: extracted.desc, date, dateLabel };
     }
   }
 
-  // ── Income keywords (prefix): "income 25000 invoice" / "prijem 25000" ──
-  const incPrefixRe = /^(income|prijem|prijmy|faktura|invoice)\s+/i;
-  if (incPrefixRe.test(lower)) {
-    const withoutPrefix = clean.replace(incPrefixRe, '');
-    const m = withoutPrefix.match(/^([\d][\d\s,.]*)\s*(.*)/);
-    if (m) {
-      const amount = parseAmount(m[1]);
-      if (!isNaN(amount) && amount > 0) return { type: 'income', amount, desc: m[2].trim(), date, dateLabel };
+  // ═══ STEP 6: "v" shortcut — only if it's a standalone prefix "v 800 benzin" ═══
+  //  (can't use "v" as a keyword-anywhere because it appears in Czech words)
+
+  const vPrefixRe = /^v\s+(\d)/i;
+  if (vPrefixRe.test(lower)) {
+    const withoutV = clean.replace(/^v\s+/i, '');
+    const extracted = extractAmountAndDesc(withoutV);
+    if (extracted && extracted.amount > 0) {
+      return { type: 'expense', amount: extracted.amount, desc: extracted.desc, date, dateLabel };
     }
   }
 
-  // ── Number-first = income (default) ──
-  const numMatch = clean.match(/^([\d][\d\s]*(?:[,.]\d+)?)\s*(.*)/);
-  if (numMatch) {
-    const amount = parseAmount(numMatch[1]);
-    if (!isNaN(amount) && amount > 0) return { type: 'income', amount, desc: numMatch[2].trim(), date, dateLabel };
+  // ═══ STEP 7: No keyword — find amount anywhere, default to income ═══
+  //  (user gets "Was this an expense?" button to flip)
+
+  const extracted = extractAmountAndDesc(clean);
+  if (extracted && extracted.amount > 0) {
+    return { type: 'income', amount: extracted.amount, desc: extracted.desc, date, dateLabel };
   }
 
   return { type: 'unknown' };
@@ -335,12 +440,23 @@ const MONTH_NAMES = {
   en: ['','January','February','March','April','May','June','July','August','September','October','November','December'],
 };
 
+const MONTH_SHORT = {
+  cs: ['','Led','Úno','Bře','Dub','Kvě','Čvn','Čvc','Srp','Zář','Říj','Lis','Pro'],
+  en: ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'],
+};
+
+/**
+ * Day grid — the main calendar view.
+ * ◀  [Month ▾]  [Year ▾]  ▶
+ * Tapping Month → month picker. Tapping Year → year picker.
+ */
 function buildCalendar(year, month, lang = 'cs') {
   const kb = new InlineKeyboard();
 
-  // ── Header: ◀ Month Year ▶ ──
+  // ── Header: ◀  [Month ▾]  [Year ▾]  ▶ ──
   kb.text('◀', `cal_nav_${year}_${month - 1}`)
-    .text(`${MONTH_NAMES[lang][month]} ${year}`, 'cal_noop')
+    .text(`${MONTH_NAMES[lang][month]} ▾`, `cal_months_${year}`)
+    .text(`${year} ▾`, `cal_years_${month}`)
     .text('▶', `cal_nav_${year}_${month + 1}`)
     .row();
 
@@ -359,7 +475,6 @@ function buildCalendar(year, month, lang = 'cs') {
 
   let col = 0;
 
-  // Empty cells before first day
   for (let i = 0; i < startOffset; i++) {
     kb.text(' ', 'cal_noop');
     col++;
@@ -367,7 +482,7 @@ function buildCalendar(year, month, lang = 'cs') {
 
   for (let d = 1; d <= daysInMonth; d++) {
     const isToday = isCurrentMonth && today.getDate() === d;
-    const label = isToday ? `[${d}]` : `${d}`;
+    const label = isToday ? `•${d}•` : `${d}`;
     const pad = d < 10 ? '0' + d : '' + d;
     const pm = month < 10 ? '0' + month : '' + month;
     kb.text(label, `cal_day_${year}${pm}${pad}`);
@@ -375,7 +490,6 @@ function buildCalendar(year, month, lang = 'cs') {
     if (col % 7 === 0) kb.row();
   }
 
-  // Fill remaining cells in last row
   while (col % 7 !== 0) {
     kb.text(' ', 'cal_noop');
     col++;
@@ -384,8 +498,61 @@ function buildCalendar(year, month, lang = 'cs') {
 
   // ── Quick actions ──
   kb.text(lang === 'cs' ? '📌 Dnes' : '📌 Today', 'cal_today')
+    .text(lang === 'cs' ? '↩️ Měsíce' : '↩️ Months', `cal_months_${year}`)
     .text(lang === 'cs' ? '❌ Zrušit' : '❌ Cancel', 'wiz_cancel');
 
+  return kb;
+}
+
+/**
+ * Month picker — 4 rows × 3 columns grid.
+ * This is the FIRST view users see when picking a date.
+ * Tapping a month drills into the day grid for that month.
+ */
+function buildMonthPicker(year, lang = 'cs') {
+  const kb = new InlineKeyboard();
+
+  // ── Year navigation header ──
+  kb.text('◀', `cal_monthpick_${year - 1}`)
+    .text(`── ${year} ──`, 'cal_noop')
+    .text('▶', `cal_monthpick_${year + 1}`)
+    .row();
+
+  const now = new Date();
+  const curMonth = now.getFullYear() === year ? now.getMonth() + 1 : -1;
+
+  // ── 4 rows × 3 months ──
+  for (let row = 0; row < 4; row++) {
+    for (let c = 0; c < 3; c++) {
+      const m = row * 3 + c + 1;
+      const label = curMonth === m ? `• ${MONTH_SHORT[lang][m]} •` : MONTH_SHORT[lang][m];
+      kb.text(label, `cal_set_${year}_${m}`);
+    }
+    kb.row();
+  }
+
+  // ── Bottom actions ──
+  kb.text(lang === 'cs' ? '📌 Dnes' : '📌 Today', 'cal_today')
+    .text(lang === 'cs' ? '❌ Zrušit' : '❌ Cancel', 'wiz_cancel');
+
+  return kb;
+}
+
+/**
+ * Year picker — row of year buttons.
+ * Tapping a year jumps to the day grid for that year + remembered month.
+ */
+function buildYearPicker(month, lang = 'cs') {
+  const kb = new InlineKeyboard();
+  const curYear = new Date().getFullYear();
+
+  for (let y = curYear - 2; y <= curYear + 1; y++) {
+    if (y < 2020 || y > 2030) continue;
+    const label = y === curYear ? `•${y}•` : `${y}`;
+    kb.text(label, `cal_set_${y}_${month}`);
+  }
+  kb.row();
+  kb.text(lang === 'cs' ? '❌ Zrušit' : '❌ Cancel', 'wiz_cancel');
   return kb;
 }
 
@@ -420,7 +587,7 @@ const T = {
       : type === 'expense'
       ? '🧾 *Kolik?*\nZadej částku (a volitelně popis):\n\n`4900`\n`4900 notebook`'
       : '🚗 *Kolik km a kam?*\n\n`150 Brno`\n`150km schůzka Praha`',
-    wizPickDate:    '📅 *Vyber datum:*\nKlikni na den v kalendáři, nebo stiskni Dnes.',
+    wizPickDate:    '📅 *Vyber měsíc a den:*',
     wizConfirm:     (type, amount, desc, dateStr) => {
       const icon = type === 'income' ? '💰' : type === 'expense' ? '🧾' : '🚗';
       const label = type === 'income' ? 'Příjem' : type === 'expense' ? 'Výdaj' : 'Kilometry';
@@ -443,6 +610,7 @@ const T = {
     expenseDefault: 'výdaj',
     kmDefault:      'pracovní cesta',
     expenseError:   '❌ Zkus: `vydaj 3500 telefon` nebo použij tlačítko 🧾',
+    kmError:        '❌ Nerozpoznal jsem km. Zkus:\n`150km Brno` nebo `150 km schůzka Praha`',
 
     wasExpense:     '↩️ Měl to být výdaj',
     wasIncome:      '↩️ Měl to být příjem',
@@ -533,7 +701,7 @@ const T = {
       : type === 'expense'
       ? '🧾 *How much?*\nEnter amount (and optional description):\n\n`4900`\n`4900 laptop`'
       : '🚗 *How many km and where?*\n\n`150 Brno`\n`150km meeting Prague`',
-    wizPickDate:    '📅 *Pick a date:*\nTap a day on the calendar, or press Today.',
+    wizPickDate:    '📅 *Pick a month and day:*',
     wizConfirm:     (type, amount, desc, dateStr) => {
       const icon = type === 'income' ? '💰' : type === 'expense' ? '🧾' : '🚗';
       const label = type === 'income' ? 'Income' : type === 'expense' ? 'Expense' : 'Mileage';
@@ -555,6 +723,7 @@ const T = {
     expenseDefault: 'expense',
     kmDefault:      'business trip',
     expenseError:   '❌ Try: `expense 3500 phone` or use the 🧾 button',
+    kmError:        '❌ Couldn\'t parse km. Try:\n`150km Brno` or `150 km meeting Prague`',
 
     wasExpense:     '↩️ Should be expense',
     wasIncome:      '↩️ Should be income',
@@ -913,6 +1082,68 @@ bot.callbackQuery('cal_today', async ctx => {
 // ── Wizard: noop (calendar headers, empty cells) ──
 bot.callbackQuery('cal_noop', ctx => ctx.answerCallbackQuery());
 
+// ── Wizard: month picker (tap month name in calendar header) ──
+bot.callbackQuery(/^cal_months_/, async ctx => {
+  await ctx.answerCallbackQuery();
+  const year = parseInt(ctx.callbackQuery.data.split('_')[2]);
+  const lang = getLang(ctx);
+  if (ctx.session.wizard) ctx.session.wizard.calYear = year;
+  try {
+    await ctx.editMessageReplyMarkup({ reply_markup: buildMonthPicker(year, lang) });
+  } catch (e) {
+    await ctx.reply(lang === 'cs' ? '📅 Vyber měsíc:' : '📅 Pick a month:', { reply_markup: buildMonthPicker(year, lang) });
+  }
+});
+
+// ── Wizard: navigate year within month picker ──
+bot.callbackQuery(/^cal_monthpick_/, async ctx => {
+  await ctx.answerCallbackQuery();
+  let year = parseInt(ctx.callbackQuery.data.split('_')[2]);
+  if (year < 2020) year = 2020;
+  if (year > 2030) year = 2030;
+  const lang = getLang(ctx);
+  if (ctx.session.wizard) ctx.session.wizard.calYear = year;
+  try {
+    await ctx.editMessageReplyMarkup({ reply_markup: buildMonthPicker(year, lang) });
+  } catch (e) {}
+});
+
+// ── Wizard: year picker (tap year in calendar header) ──
+bot.callbackQuery(/^cal_years_/, async ctx => {
+  await ctx.answerCallbackQuery();
+  const month = parseInt(ctx.callbackQuery.data.split('_')[2]);
+  const lang = getLang(ctx);
+  if (ctx.session.wizard) ctx.session.wizard.calMonth = month;
+  try {
+    await ctx.editMessageReplyMarkup({ reply_markup: buildYearPicker(month, lang) });
+  } catch (e) {
+    await ctx.reply(lang === 'cs' ? '📅 Vyber rok:' : '📅 Pick a year:', { reply_markup: buildYearPicker(month, lang) });
+  }
+});
+
+// ── Wizard: jump to specific month/year (from month or year picker) ──
+bot.callbackQuery(/^cal_set_/, async ctx => {
+  await ctx.answerCallbackQuery();
+  const parts = ctx.callbackQuery.data.split('_');
+  let year = parseInt(parts[2]);
+  let month = parseInt(parts[3]);
+  if (year < 2020) year = 2020;
+  if (year > 2030) year = 2030;
+  if (month < 1) month = 1;
+  if (month > 12) month = 12;
+
+  const lang = getLang(ctx);
+  if (ctx.session.wizard) {
+    ctx.session.wizard.calYear = year;
+    ctx.session.wizard.calMonth = month;
+  }
+  try {
+    await ctx.editMessageReplyMarkup({ reply_markup: buildCalendar(year, month, lang) });
+  } catch (e) {
+    await ctx.reply(T[lang].wizPickDate, { parse_mode: 'Markdown', reply_markup: buildCalendar(year, month, lang) });
+  }
+});
+
 // ── Wizard: save ──
 bot.callbackQuery('wiz_save', async ctx => {
   await ctx.answerCallbackQuery();
@@ -952,13 +1183,12 @@ bot.callbackQuery('wiz_redate', async ctx => {
   const lang = getLang(ctx);
   const now = new Date();
   const calYear = wiz.calYear || now.getFullYear();
-  const calMonth = wiz.calMonth || (now.getMonth() + 1);
 
   try { await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard() }); } catch (e) {}
 
   await ctx.reply(T[lang].wizPickDate, {
     parse_mode: 'Markdown',
-    reply_markup: buildCalendar(calYear, calMonth, lang),
+    reply_markup: buildMonthPicker(calYear, lang),
   });
 });
 
@@ -1041,35 +1271,11 @@ bot.on('message:text', async ctx => {
   // ── Wizard: awaiting amount ──
   if (wiz && wiz.step === 'amount') {
     if (wiz.type === 'km') {
-      // Parse km amount + purpose
-      const kmMatch = text.match(/^([\d][\d\s,.]*?)\s*(?:km)?\s*(.*)/i);
-      if (kmMatch) {
-        const km = parseAmount(kmMatch[1]);
-        if (!isNaN(km) && km > 0) {
-          wiz.amount = km;
-          wiz.desc = kmMatch[2].trim() || '';
-          wiz.step = 'date';
-
-          const now = new Date();
-          wiz.calYear = now.getFullYear();
-          wiz.calMonth = now.getMonth() + 1;
-
-          return ctx.reply(t.wizPickDate, {
-            parse_mode: 'Markdown',
-            reply_markup: buildCalendar(wiz.calYear, wiz.calMonth, lang),
-          });
-        }
-      }
-      return ctx.reply(t.wizAmount('km'), { parse_mode: 'Markdown' });
-    }
-
-    // Parse amount + optional description
-    const numMatch = text.match(/^([\d][\d\s]*(?:[,.]\d+)?)\s*(.*)/);
-    if (numMatch) {
-      const amount = parseAmount(numMatch[1]);
-      if (!isNaN(amount) && amount > 0) {
-        wiz.amount = amount;
-        wiz.desc = numMatch[2].trim() || '';
+      // Parse km amount + purpose (flexible: "150 Brno", "Brno 150km", "150km Brno")
+      const kmExtracted = extractKmAndDesc(text);
+      if (kmExtracted) {
+        wiz.amount = kmExtracted.km;
+        wiz.desc = kmExtracted.desc;
         wiz.step = 'date';
 
         const now = new Date();
@@ -1078,9 +1284,27 @@ bot.on('message:text', async ctx => {
 
         return ctx.reply(t.wizPickDate, {
           parse_mode: 'Markdown',
-          reply_markup: buildCalendar(wiz.calYear, wiz.calMonth, lang),
+          reply_markup: buildMonthPicker(wiz.calYear, lang),
         });
       }
+      return ctx.reply(t.wizAmount('km'), { parse_mode: 'Markdown' });
+    }
+
+    // Parse amount + optional description (flexible: number can be anywhere)
+    const extracted = extractAmountAndDesc(text);
+    if (extracted) {
+      wiz.amount = extracted.amount;
+      wiz.desc = extracted.desc;
+      wiz.step = 'date';
+
+      const now = new Date();
+      wiz.calYear = now.getFullYear();
+      wiz.calMonth = now.getMonth() + 1;
+
+      return ctx.reply(t.wizPickDate, {
+        parse_mode: 'Markdown',
+        reply_markup: buildMonthPicker(wiz.calYear, lang),
+      });
     }
 
     return ctx.reply(t.wizAmount(wiz.type), { parse_mode: 'Markdown' });
@@ -1099,6 +1323,10 @@ bot.on('message:text', async ctx => {
     const purpose = intent.purpose || t.kmDefault;
     await addMileage(ctx.from.id, intent.km, purpose, intent.date);
     return ctx.reply(t.kmSaved(intent.km, purpose, intent.dateLabel), { parse_mode: 'Markdown' });
+  }
+
+  if (intent.type === 'km_error') {
+    return ctx.reply(t.kmError, { parse_mode: 'Markdown' });
   }
 
   if (intent.type === 'expense_error') {
