@@ -29,27 +29,36 @@ const TAX_BY_YEAR = {
     PRUMERNA_MZDA: 43967,
     HIGH_RATE_THRESHOLD: 1582812,  // 36 × 43 967
     BASIC_DEDUCTION: 30840,
-    SOCIAL_MIN_MONTHLY_VZ: 13191,  // 30 % of průměrná mzda (2024 was transitional)
-    HEALTH_MIN_MONTHLY_VZ: 21984,  // 50 % of průměrná mzda (43967 × 0.5 = 21983.5)
+    SOCIAL_MIN_MONTHLY_VZ: 13191,  // hlavní: 30 % of průměrná mzda (2024 transitional)
+    HEALTH_MIN_MONTHLY_VZ: 21984,  // hlavní: 50 % of průměrná mzda
     SOCIAL_MAX_ANNUAL_VZ: 2110416, // 48 × průměrná mzda
+    // Vedlejší
+    VEDLEJSI_SOCIAL_MIN_MONTHLY_VZ: 5122, // vedlejší min VZ
+    VEDLEJSI_ROZHODNA_CASTKA: 105520,     // daňový základ threshold for social
     PAUSALNI_DAN: { band1: { max: 1000000, monthly: 7498 }, band2: { max: 1500000, monthly: 16745 }, band3: { max: 2000000, monthly: 27139 } },
   },
   2025: {
     PRUMERNA_MZDA: 46557,
     HIGH_RATE_THRESHOLD: 1676052,  // 36 × 46 557
     BASIC_DEDUCTION: 30840,
-    SOCIAL_MIN_MONTHLY_VZ: 16295,  // 35 % of 46 557 (confirmed ČSSZ)
-    HEALTH_MIN_MONTHLY_VZ: 23279,  // 50 % of 46 557 (23 278.50 rounded, confirmed VZP)
+    SOCIAL_MIN_MONTHLY_VZ: 16295,  // hlavní: 35 % of 46 557 (confirmed ČSSZ)
+    HEALTH_MIN_MONTHLY_VZ: 23279,  // hlavní: 50 % of 46 557 (confirmed VZP)
     SOCIAL_MAX_ANNUAL_VZ: 2234736, // 48 × 46 557
+    // Vedlejší
+    VEDLEJSI_SOCIAL_MIN_MONTHLY_VZ: 5122, // vedlejší min VZ (confirmed ČSSZ)
+    VEDLEJSI_ROZHODNA_CASTKA: 111736,     // rozhodná částka 2025 (confirmed ČSSZ)
     PAUSALNI_DAN: { band1: { max: 1000000, monthly: 8716 }, band2: { max: 1500000, monthly: 16745 }, band3: { max: 2000000, monthly: 27139 } },
   },
   2026: {
     PRUMERNA_MZDA: 48967,
     HIGH_RATE_THRESHOLD: 1762812,  // 36 × 48 967
     BASIC_DEDUCTION: 30840,
-    SOCIAL_MIN_MONTHLY_VZ: 19587,  // 40 % of 48 967 (confirmed ČSSZ)
-    HEALTH_MIN_MONTHLY_VZ: 24484,  // 50 % of 48 967 (24 483.50 rounded, confirmed VZP)
+    SOCIAL_MIN_MONTHLY_VZ: 19587,  // hlavní: 40 % of 48 967 (confirmed ČSSZ)
+    HEALTH_MIN_MONTHLY_VZ: 24484,  // hlavní: 50 % of 48 967 (confirmed VZP)
     SOCIAL_MAX_ANNUAL_VZ: 2350416, // 48 × 48 967
+    // Vedlejší
+    VEDLEJSI_SOCIAL_MIN_MONTHLY_VZ: 5387, // vedlejší min VZ (confirmed ČSSZ)
+    VEDLEJSI_ROZHODNA_CASTKA: 117521,     // rozhodná částka 2026 (confirmed ČSSZ)
     PAUSALNI_DAN: { band1: { max: 1000000, monthly: 9984 }, band2: { max: 1500000, monthly: 16745 }, band3: { max: 2000000, monthly: 27139 } },
   },
 };
@@ -60,40 +69,68 @@ const TAX_SHARED = {
   HIGH_RATE: 0.23,
   PAUSALNI_VYDAJE_RATE: 0.60, // 60 % for most OSVČ (živnosti)
   SOCIAL_RATE: 0.292,
-  SOCIAL_VZ_RATIO: 0.55,     // ← FIXED: was 0.50, correct = 55 % since 2024
+  SOCIAL_VZ_RATIO: 0.55,     // 55 % of daňový základ since 2024
   HEALTH_RATE: 0.135,
   HEALTH_VZ_RATIO: 0.50,     // 50 % of daňový základ
 };
 
 function getTaxParams(year) {
-  return TAX_BY_YEAR[year] || TAX_BY_YEAR[2026]; // fallback to latest
+  return TAX_BY_YEAR[year] || TAX_BY_YEAR[2026];
 }
 
-function calcPausal(income, year = 2026) {
+/**
+ * Calculate taxes under paušální výdaje (flat-rate expenses 60%).
+ * @param {number} income - Annual gross income
+ * @param {number} year - Tax year
+ * @param {'hlavni'|'vedlejsi'} activity - Activity type
+ */
+function calcPausal(income, year = 2026, activity = 'hlavni') {
   const p = getTaxParams(year);
   const s = TAX_SHARED;
+  const isVedlejsi = activity === 'vedlejsi';
 
   const expenses = income * s.PAUSALNI_VYDAJE_RATE;
   const base = Math.floor(Math.max(0, income - expenses) / 100) * 100; // daňový základ
 
-  // ── Income tax (15 % / 23 %) ──
+  // ── Income tax (15 % / 23 %) — same for both types ──
   let tax = base <= p.HIGH_RATE_THRESHOLD
     ? base * s.INCOME_TAX_RATE
     : p.HIGH_RATE_THRESHOLD * s.INCOME_TAX_RATE + (base - p.HIGH_RATE_THRESHOLD) * s.HIGH_RATE;
   tax = Math.max(0, tax - p.BASIC_DEDUCTION);
 
-  // ── Social: 29.2 % of max(min_annual_VZ, 55 % of daňový základ) ──
-  const socialVZ = base * s.SOCIAL_VZ_RATIO;        // 55 % of daňový základ
-  const socialMinAnnualVZ = p.SOCIAL_MIN_MONTHLY_VZ * 12;
-  const socialMaxAnnualVZ = p.SOCIAL_MAX_ANNUAL_VZ;
-  const socialBase = Math.min(socialMaxAnnualVZ, Math.max(socialMinAnnualVZ, socialVZ));
-  const social = socialBase * s.SOCIAL_RATE;
+  // ── Social insurance ──
+  let social = 0;
+  if (isVedlejsi) {
+    // Vedlejší: only pay if daňový základ > rozhodná částka
+    if (base > p.VEDLEJSI_ROZHODNA_CASTKA) {
+      const socialVZ = base * s.SOCIAL_VZ_RATIO;
+      const socialMinAnnualVZ = p.VEDLEJSI_SOCIAL_MIN_MONTHLY_VZ * 12;
+      const socialBase = Math.min(p.SOCIAL_MAX_ANNUAL_VZ, Math.max(socialMinAnnualVZ, socialVZ));
+      social = socialBase * s.SOCIAL_RATE;
+    }
+    // else: 0
+  } else {
+    // Hlavní: always pay, at least from minimum VZ
+    const socialVZ = base * s.SOCIAL_VZ_RATIO;
+    const socialMinAnnualVZ = p.SOCIAL_MIN_MONTHLY_VZ * 12;
+    const socialBase = Math.min(p.SOCIAL_MAX_ANNUAL_VZ, Math.max(socialMinAnnualVZ, socialVZ));
+    social = socialBase * s.SOCIAL_RATE;
+  }
 
-  // ── Health: 13.5 % of max(min_annual_VZ, 50 % of daňový základ) ──
-  const healthVZ = base * s.HEALTH_VZ_RATIO;         // 50 % of daňový základ
-  const healthMinAnnualVZ = p.HEALTH_MIN_MONTHLY_VZ * 12;
-  const healthBase = Math.max(healthMinAnnualVZ, healthVZ);
-  const health = healthBase * s.HEALTH_RATE;
+  // ── Health insurance ──
+  let health = 0;
+  if (isVedlejsi) {
+    // Vedlejší: calculated from actual VZ, NO minimum applies
+    // Paid retroactively via přehled, not monthly
+    const healthVZ = base * s.HEALTH_VZ_RATIO;
+    health = healthVZ * s.HEALTH_RATE;
+  } else {
+    // Hlavní: must pay at least from minimum VZ
+    const healthVZ = base * s.HEALTH_VZ_RATIO;
+    const healthMinAnnualVZ = p.HEALTH_MIN_MONTHLY_VZ * 12;
+    const healthBase = Math.max(healthMinAnnualVZ, healthVZ);
+    health = healthBase * s.HEALTH_RATE;
+  }
 
   const total = tax + social + health;
   return {
@@ -101,6 +138,7 @@ function calcPausal(income, year = 2026) {
     health: Math.round(health), total: Math.round(total),
     net: Math.round(income - total),
     rate: income > 0 ? (total / income * 100).toFixed(1) : 0,
+    base, // expose for display
   };
 }
 
@@ -655,6 +693,9 @@ const T = {
     taxFlat1:       'Paušální daň',
     taxPausal1:     'Paušální výdaje',
     taxWarning:     '⚠️ Odhad. Poraď se s účetní/m.',
+    vedlejsiInfo:   (base, limit, paysSocial) => paysSocial
+      ? `📋 Základ daně: *${czk(base)}* > rozhodná částka ${czk(limit)}\n→ Sociální pojištění se *platí*\n\n`
+      : `📋 Základ daně: *${czk(base)}* < rozhodná částka ${czk(limit)}\n→ Sociální pojištění: *0 Kč* ✅\n\n`,
     switchYear:     (y) => `📅 → ${y}`,
 
     addAnother:     (type) => type === 'income' ? '💰 Další příjem' : type === 'expense' ? '🧾 Další výdaj' : '🚗 Další km',
@@ -667,6 +708,12 @@ const T = {
     resetCancelled:'✅ Zrušeno, data zůstávají.',
     resetYes:      '🗑️ Ano, smazat vše',
     resetNo:       '↩️ Ne, ponechat',
+    actHlavni:     'Hlavní činnost',
+    actVedlejsi:   'Vedlejší činnost',
+    actChanged:    (act) => act === 'vedlejsi'
+      ? '✅ Nastaveno: *vedlejší činnost*\nSociální pojištění se platí jen při zisku nad rozhodnou částku. Zdravotní z reálných příjmů.'
+      : '✅ Nastaveno: *hlavní činnost*\nMinimální odvody se platí i při nulovém příjmu.',
+    actNote:       (act) => act === 'vedlejsi' ? '_(vedlejší činnost)_' : '_(hlavní činnost)_',
     helpText:
       `❓ *Jak mě používat*\n\n` +
       `*Rychlý vstup (napiš zprávu):*\n` +
@@ -771,6 +818,9 @@ const T = {
     taxFlat1:       'Flat-rate tax',
     taxPausal1:     'Flat-rate expenses',
     taxWarning:     '⚠️ Estimate only. Consult an accountant.',
+    vedlejsiInfo:   (base, limit, paysSocial) => paysSocial
+      ? `📋 Tax base: *${czk(base)}* > threshold ${czk(limit)}\n→ Social insurance *applies*\n\n`
+      : `📋 Tax base: *${czk(base)}* < threshold ${czk(limit)}\n→ Social insurance: *0 Kč* ✅\n\n`,
     switchYear:     (y) => `📅 → ${y}`,
 
     addAnother:     (type) => type === 'income' ? '💰 Another income' : type === 'expense' ? '🧾 Another expense' : '🚗 Another trip',
@@ -783,6 +833,12 @@ const T = {
     resetCancelled:'✅ Cancelled, your data is safe.',
     resetYes:      '🗑️ Yes, delete all',
     resetNo:       '↩️ No, keep it',
+    actHlavni:     'Primary activity',
+    actVedlejsi:   'Secondary activity',
+    actChanged:    (act) => act === 'vedlejsi'
+      ? '✅ Set to: *secondary activity*\nSocial insurance only above income threshold. Health from actual income.'
+      : '✅ Set to: *primary activity*\nMinimum levies apply even with zero income.',
+    actNote:       (act) => act === 'vedlejsi' ? '_(secondary activity)_' : '_(primary activity)_',
     helpText:
       `❓ *How to use me*\n\n` +
       `*Quick input (just type):*\n` +
@@ -904,6 +960,7 @@ bot.use(session({
     lang: 'cs',
     year: THIS_YEAR,
     lastEntry: null,
+    activity: 'hlavni', // 'hlavni' or 'vedlejsi'
     // Wizard state
     wizard: null, // { step: 'amount'|'date'|'confirm', type: 'income'|'expense'|'km', amount, desc, date, calYear, calMonth }
   }),
@@ -911,17 +968,20 @@ bot.use(session({
 
 const getLang = (ctx) => ctx.session?.lang || 'cs';
 const getYear = (ctx) => ctx.session?.year || THIS_YEAR;
+const getActivity = (ctx) => ctx.session?.activity || 'hlavni';
 
 // ═══════════════════════════════════════════════════════════════
 // ██  KEYBOARDS  ██
 // ═══════════════════════════════════════════════════════════════
-const mainMenu = (lang) => {
+const mainMenu = (lang, activity = 'hlavni') => {
   const m = T[lang].menu;
+  const actLabel = activity === 'vedlejsi' ? T[lang].actVedlejsi : T[lang].actHlavni;
   return new InlineKeyboard()
     .text(m.income,  'add_income').text(m.expense, 'add_expense').row()
     .text(m.km,      'add_km').row()
     .text(m.summary, 'summary').text(m.tax, 'calc_tax').row()
     .text(m.entries, 'entries').row()
+    .text(`⚙️ ${actLabel}`, 'toggle_activity').row()
     .text(m.help,    'help').text(m.lang, 'toggle_lang').row();
 };
 
@@ -959,7 +1019,7 @@ bot.command('start', async ctx => {
   await upsertUser(ctx.from);
   ctx.session.wizard = null;
   const lang = getLang(ctx);
-  await ctx.reply(T[lang].welcome(ctx.from.first_name), { parse_mode: 'Markdown', reply_markup: mainMenu(lang) });
+  await ctx.reply(T[lang].welcome(ctx.from.first_name), { parse_mode: 'Markdown', reply_markup: mainMenu(lang, getActivity(ctx)) });
 });
 
 bot.command('prehled', ctx => askYear(ctx, 'sum'));
@@ -975,7 +1035,7 @@ bot.command('reset',   async ctx => {
 });
 bot.command('menu',    async ctx => {
   ctx.session.wizard = null;
-  await ctx.reply('📋', { reply_markup: mainMenu(getLang(ctx)) });
+  await ctx.reply('📋', { reply_markup: mainMenu(getLang(ctx), getActivity(ctx)) });
 });
 
 async function askYear(ctx, action) {
@@ -991,7 +1051,7 @@ async function askYear(ctx, action) {
 bot.callbackQuery('back_menu', async ctx => {
   await ctx.answerCallbackQuery();
   ctx.session.wizard = null;
-  await ctx.reply('📋', { reply_markup: mainMenu(getLang(ctx)) });
+  await ctx.reply('📋', { reply_markup: mainMenu(getLang(ctx), getActivity(ctx)) });
 });
 
 bot.callbackQuery('summary', ctx => { ctx.answerCallbackQuery(); askYear(ctx, 'sum'); });
@@ -1009,7 +1069,16 @@ bot.callbackQuery('toggle_lang', async ctx => {
   await ctx.answerCallbackQuery();
   const next = getLang(ctx) === 'cs' ? 'en' : 'cs';
   ctx.session.lang = next;
-  await ctx.reply(T[next].langChanged, { reply_markup: mainMenu(next) });
+  await ctx.reply(T[next].langChanged, { reply_markup: mainMenu(next, getActivity(ctx)) });
+});
+
+// ── Activity toggle (hlavní ↔ vedlejší) ──
+bot.callbackQuery('toggle_activity', async ctx => {
+  await ctx.answerCallbackQuery();
+  const next = getActivity(ctx) === 'hlavni' ? 'vedlejsi' : 'hlavni';
+  ctx.session.activity = next;
+  const lang = getLang(ctx);
+  await ctx.reply(T[lang].actChanged(next), { parse_mode: 'Markdown', reply_markup: mainMenu(lang, next) });
 });
 
 // ── Reset data ──
@@ -1021,9 +1090,9 @@ bot.callbackQuery('reset_yes', async ctx => {
   try {
     const count = await deleteAllUserData(ctx.from.id);
     if (count > 0) {
-      await ctx.reply(t.resetDone(count), { parse_mode: 'Markdown', reply_markup: mainMenu(lang) });
+      await ctx.reply(t.resetDone(count), { parse_mode: 'Markdown', reply_markup: mainMenu(lang, getActivity(ctx)) });
     } else {
-      await ctx.reply(t.resetEmpty, { reply_markup: mainMenu(lang) });
+      await ctx.reply(t.resetEmpty, { reply_markup: mainMenu(lang, getActivity(ctx)) });
     }
   } catch (err) {
     console.error('Reset error:', err);
@@ -1035,7 +1104,7 @@ bot.callbackQuery('reset_no', async ctx => {
   await ctx.answerCallbackQuery();
   const lang = getLang(ctx);
   try { await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard() }); } catch (e) {}
-  await ctx.reply(T[lang].resetCancelled, { reply_markup: mainMenu(lang) });
+  await ctx.reply(T[lang].resetCancelled, { reply_markup: mainMenu(lang, getActivity(ctx)) });
 });
 
 // ── Wizard: start flows ──
@@ -1256,7 +1325,7 @@ bot.callbackQuery('wiz_cancel', async ctx => {
 
   try { await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard() }); } catch (e) {}
 
-  await ctx.reply(T[lang].wizCancelled, { reply_markup: mainMenu(lang) });
+  await ctx.reply(T[lang].wizCancelled, { reply_markup: mainMenu(lang, getActivity(ctx)) });
 });
 
 // ── Fix type (income ↔ expense) ──
@@ -1410,7 +1479,7 @@ bot.on('message:text', async ctx => {
   }
 
   // ── Unknown → show menu ──
-  ctx.reply(t.unknown, { parse_mode: 'Markdown', reply_markup: mainMenu(lang) });
+  ctx.reply(t.unknown, { parse_mode: 'Markdown', reply_markup: mainMenu(lang, getActivity(ctx)) });
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -1422,7 +1491,7 @@ async function showEntries(ctx, offset = 0) {
   const entries = await getRecentEntries(ctx.from.id, 5, offset);
 
   if (entries.length === 0 && offset === 0) {
-    return ctx.reply(t.entriesEmpty, { reply_markup: mainMenu(lang) });
+    return ctx.reply(t.entriesEmpty, { reply_markup: mainMenu(lang, getActivity(ctx)) });
   }
 
   let text = t.entriesTitle + '\n';
@@ -1476,7 +1545,8 @@ async function showSummary(ctx) {
     chart += `${String(t.months[m]).padEnd(4)} ${'█'.repeat(bars)}${'░'.repeat(8-bars)} ${czk(total)}\n`;
   }
 
-  const tax = calcPausal(s.income, year);
+  const tax = calcPausal(s.income, year, getActivity(ctx));
+  const actNote = t.actNote(getActivity(ctx));
   const kb = new InlineKeyboard()
     .text(t.compareMethods, 'calc_tax');
 
@@ -1487,7 +1557,7 @@ async function showSummary(ctx) {
   kb.row().text(t.backToMenu, 'back_menu');
 
   await ctx.reply(
-    t.summaryTitle(year) +
+    t.summaryTitle(year) + actNote + '\n' +
     t.summaryIncome(s.income, s.count) +
     t.summaryExpenses(s.expenses) +
     `\`\`\`\n${chart}\`\`\`\n` +
@@ -1509,16 +1579,29 @@ async function showTax(ctx) {
     [ctx.from.id, year]
   );
   const ytd = parseFloat(rows[0].total);
-  if (ytd === 0) return ctx.reply(t.noIncome(year), { parse_mode: 'Markdown', reply_markup: mainMenu(lang) });
+  if (ytd === 0) return ctx.reply(t.noIncome(year), { parse_mode: 'Markdown', reply_markup: mainMenu(lang, getActivity(ctx)) });
 
   const isPast = year < currentYear;
   const annual = isPast ? ytd : (ytd / month) * 12;
   const annualLine = isPast ? t.taxAnnualFull(Math.round(annual)) : t.taxAnnual(Math.round(annual), month);
 
-  const pv = calcPausal(annual, year);
-  const pd = calcPausalnlDan(annual, year);
+  const activity = getActivity(ctx);
+  const actNote = t.actNote(activity);
+  const pv = calcPausal(annual, year, activity);
+  // Paušální daň is NOT available for vedlejší (they have other income sources)
+  const pd = activity === 'vedlejsi' ? null : calcPausalnlDan(annual, year);
 
-  let text = t.taxTitle(year) + annualLine + t.taxPausal(pv);
+  let text = t.taxTitle(year) + actNote + '\n' + annualLine;
+
+  // Show vedlejší social threshold info
+  if (activity === 'vedlejsi') {
+    const p = getTaxParams(year);
+    const base = Math.floor(Math.max(0, annual * (1 - 0.60)) / 100) * 100;
+    text += t.vedlejsiInfo(base, p.VEDLEJSI_ROZHODNA_CASTKA, pv.social > 0);
+  }
+
+  text += t.taxPausal(pv);
+
   if (pd) {
     const better = pd.net > pv.net ? t.taxBetter : '';
     text += t.taxFlat(pd, better);
@@ -1538,12 +1621,35 @@ async function showTax(ctx) {
 
 async function showHelp(ctx) {
   const lang = getLang(ctx);
-  await ctx.reply(T[lang].helpText, { parse_mode: 'Markdown', reply_markup: mainMenu(lang) });
+  await ctx.reply(T[lang].helpText, { parse_mode: 'Markdown', reply_markup: mainMenu(lang, getActivity(ctx)) });
 }
 
 // ═══════════════════════════════════════════════════════════════
 // ██  BOOT  ██
 // ═══════════════════════════════════════════════════════════════
 bot.catch(err => console.error('Bot error:', err));
-console.log('🇨🇿 Daňový Pomocník v2.0 starting...');
-bot.start();
+
+async function startWithRetry(retries = 5, delay = 3000) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      console.log(`🇨🇿 Daňový Pomocník v2.0 starting... (attempt ${i + 1}/${retries})`);
+      // drop_pending_updates avoids processing stale messages after redeploy
+      await bot.start({ drop_pending_updates: true });
+      return; // success
+    } catch (err) {
+      if (err?.error_code === 409 && i < retries - 1) {
+        // 409 = old instance still polling — wait and retry
+        console.log(`⏳ Conflict (old instance still running), retrying in ${delay / 1000}s...`);
+        await new Promise(r => setTimeout(r, delay));
+        delay *= 1.5; // back off
+      } else {
+        throw err;
+      }
+    }
+  }
+}
+
+startWithRetry().catch(err => {
+  console.error('💀 Failed to start bot after retries:', err);
+  process.exit(1);
+});
