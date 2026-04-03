@@ -1491,3 +1491,59 @@ async function showSummary(ctx) {
     t.summaryIncome(s.income, s.count) +
     t.summaryExpenses(s.expenses) +
     `\`\`\`\n${chart}\`\`\`\n` +
+    t.summaryTaxHdr +
+    t.summaryTax(tax),
+    { parse_mode: 'Markdown', reply_markup: kb }
+  );
+}
+
+async function showTax(ctx) {
+  const lang = getLang(ctx);
+  const t = T[lang];
+  const year = getYear(ctx);
+  const currentYear = new Date().getFullYear();
+  const month = new Date().getMonth() + 1;
+
+  const { rows } = await query(
+    `SELECT COALESCE(SUM(i.amount),0) AS total FROM income i JOIN users u ON u.id=i.user_id WHERE u.telegram_id=$1 AND i.year=$2`,
+    [ctx.from.id, year]
+  );
+  const ytd = parseFloat(rows[0].total);
+  if (ytd === 0) return ctx.reply(t.noIncome(year), { parse_mode: 'Markdown', reply_markup: mainMenu(lang) });
+
+  const isPast = year < currentYear;
+  const annual = isPast ? ytd : (ytd / month) * 12;
+  const annualLine = isPast ? t.taxAnnualFull(Math.round(annual)) : t.taxAnnual(Math.round(annual), month);
+
+  const pv = calcPausal(annual, year);
+  const pd = calcPausalnlDan(annual, year);
+
+  let text = t.taxTitle(year) + annualLine + t.taxPausal(pv);
+  if (pd) {
+    const better = pd.net > pv.net ? t.taxBetter : '';
+    text += t.taxFlat(pd, better);
+    const savings = Math.abs(pd.net - pv.net);
+    text += t.taxWinner(pd.net > pv.net ? t.taxFlat1 : t.taxPausal1, savings);
+  }
+  text += t.taxWarning;
+
+  const kb = new InlineKeyboard();
+  for (const y of [2024, 2025, 2026]) {
+    if (y !== year) kb.text(t.switchYear(y), `tax_${y}`);
+  }
+  kb.row().text(t.backToMenu, 'back_menu');
+
+  await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: kb });
+}
+
+async function showHelp(ctx) {
+  const lang = getLang(ctx);
+  await ctx.reply(T[lang].helpText, { parse_mode: 'Markdown', reply_markup: mainMenu(lang) });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ██  BOOT  ██
+// ═══════════════════════════════════════════════════════════════
+bot.catch(err => console.error('Bot error:', err));
+console.log('🇨🇿 Daňový Pomocník v2.0 starting...');
+bot.start();
