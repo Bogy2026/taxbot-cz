@@ -14,34 +14,87 @@ const pool = new Pool({
 async function query(text, params) { return pool.query(text, params); }
 
 // ═══════════════════════════════════════════════════════════════
-// ██  CZECH TAX ENGINE  ██
+// ██  CZECH TAX ENGINE (year-specific, verified Apr 2026)  ██
 // ═══════════════════════════════════════════════════════════════
-const TAX = {
-  INCOME_TAX_RATE: 0.15,
-  HIGH_RATE: 0.23,
-  HIGH_RATE_THRESHOLD: 1867728,
-  PAUSALNI_VYDAJE_RATE: 0.60,
-  BASIC_DEDUCTION: 30840,
-  SOCIAL_RATE: 0.292,
-  SOCIAL_MIN_BASE: 117048,
-  HEALTH_RATE: 0.135,
-  HEALTH_MIN_BASE: 268884,
-  PAUSALNI_DAN: {
-    band1: { max: 1500000, monthly: 8716 },
-    band2: { max: 2000000, monthly: 16745 },
-    band3: { max: 3000000, monthly: 27139 },
+//
+// Sources: ČSSZ, VZP, Finanční správa, MPSV
+//
+// KEY FORMULAS:
+//   Social VZ  = 55 % of daňový základ  (changed from 50 % in 2024)
+//   Health VZ  = 50 % of daňový základ
+//   23 % threshold = 36 × průměrná mzda (changed from 48× in 2024)
+//
+const TAX_BY_YEAR = {
+  2024: {
+    PRUMERNA_MZDA: 43967,
+    HIGH_RATE_THRESHOLD: 1582812,  // 36 × 43 967
+    BASIC_DEDUCTION: 30840,
+    SOCIAL_MIN_MONTHLY_VZ: 13191,  // 30 % of průměrná mzda (2024 was transitional)
+    HEALTH_MIN_MONTHLY_VZ: 21984,  // 50 % of průměrná mzda (43967 × 0.5 = 21983.5)
+    SOCIAL_MAX_ANNUAL_VZ: 2110416, // 48 × průměrná mzda
+    PAUSALNI_DAN: { band1: { max: 1000000, monthly: 7498 }, band2: { max: 1500000, monthly: 16745 }, band3: { max: 2000000, monthly: 27139 } },
+  },
+  2025: {
+    PRUMERNA_MZDA: 46557,
+    HIGH_RATE_THRESHOLD: 1676052,  // 36 × 46 557
+    BASIC_DEDUCTION: 30840,
+    SOCIAL_MIN_MONTHLY_VZ: 16295,  // 35 % of 46 557 (confirmed ČSSZ)
+    HEALTH_MIN_MONTHLY_VZ: 23279,  // 50 % of 46 557 (23 278.50 rounded, confirmed VZP)
+    SOCIAL_MAX_ANNUAL_VZ: 2234736, // 48 × 46 557
+    PAUSALNI_DAN: { band1: { max: 1000000, monthly: 8716 }, band2: { max: 1500000, monthly: 16745 }, band3: { max: 2000000, monthly: 27139 } },
+  },
+  2026: {
+    PRUMERNA_MZDA: 48967,
+    HIGH_RATE_THRESHOLD: 1762812,  // 36 × 48 967
+    BASIC_DEDUCTION: 30840,
+    SOCIAL_MIN_MONTHLY_VZ: 19587,  // 40 % of 48 967 (confirmed ČSSZ)
+    HEALTH_MIN_MONTHLY_VZ: 24484,  // 50 % of 48 967 (24 483.50 rounded, confirmed VZP)
+    SOCIAL_MAX_ANNUAL_VZ: 2350416, // 48 × 48 967
+    PAUSALNI_DAN: { band1: { max: 1000000, monthly: 9984 }, band2: { max: 1500000, monthly: 16745 }, band3: { max: 2000000, monthly: 27139 } },
   },
 };
 
-function calcPausal(income) {
-  const expenses = income * TAX.PAUSALNI_VYDAJE_RATE;
-  const base = Math.floor(Math.max(0, income - expenses) / 100) * 100;
-  let tax = base <= TAX.HIGH_RATE_THRESHOLD
-    ? base * TAX.INCOME_TAX_RATE
-    : TAX.HIGH_RATE_THRESHOLD * TAX.INCOME_TAX_RATE + (base - TAX.HIGH_RATE_THRESHOLD) * TAX.HIGH_RATE;
-  tax = Math.max(0, tax - TAX.BASIC_DEDUCTION);
-  const social = Math.max(TAX.SOCIAL_MIN_BASE, base * 0.5) * TAX.SOCIAL_RATE;
-  const health = Math.max(TAX.HEALTH_MIN_BASE, base * 0.5) * TAX.HEALTH_RATE;
+// Shared constants (unchanged across years)
+const TAX_SHARED = {
+  INCOME_TAX_RATE: 0.15,
+  HIGH_RATE: 0.23,
+  PAUSALNI_VYDAJE_RATE: 0.60, // 60 % for most OSVČ (živnosti)
+  SOCIAL_RATE: 0.292,
+  SOCIAL_VZ_RATIO: 0.55,     // ← FIXED: was 0.50, correct = 55 % since 2024
+  HEALTH_RATE: 0.135,
+  HEALTH_VZ_RATIO: 0.50,     // 50 % of daňový základ
+};
+
+function getTaxParams(year) {
+  return TAX_BY_YEAR[year] || TAX_BY_YEAR[2026]; // fallback to latest
+}
+
+function calcPausal(income, year = 2026) {
+  const p = getTaxParams(year);
+  const s = TAX_SHARED;
+
+  const expenses = income * s.PAUSALNI_VYDAJE_RATE;
+  const base = Math.floor(Math.max(0, income - expenses) / 100) * 100; // daňový základ
+
+  // ── Income tax (15 % / 23 %) ──
+  let tax = base <= p.HIGH_RATE_THRESHOLD
+    ? base * s.INCOME_TAX_RATE
+    : p.HIGH_RATE_THRESHOLD * s.INCOME_TAX_RATE + (base - p.HIGH_RATE_THRESHOLD) * s.HIGH_RATE;
+  tax = Math.max(0, tax - p.BASIC_DEDUCTION);
+
+  // ── Social: 29.2 % of max(min_annual_VZ, 55 % of daňový základ) ──
+  const socialVZ = base * s.SOCIAL_VZ_RATIO;        // 55 % of daňový základ
+  const socialMinAnnualVZ = p.SOCIAL_MIN_MONTHLY_VZ * 12;
+  const socialMaxAnnualVZ = p.SOCIAL_MAX_ANNUAL_VZ;
+  const socialBase = Math.min(socialMaxAnnualVZ, Math.max(socialMinAnnualVZ, socialVZ));
+  const social = socialBase * s.SOCIAL_RATE;
+
+  // ── Health: 13.5 % of max(min_annual_VZ, 50 % of daňový základ) ──
+  const healthVZ = base * s.HEALTH_VZ_RATIO;         // 50 % of daňový základ
+  const healthMinAnnualVZ = p.HEALTH_MIN_MONTHLY_VZ * 12;
+  const healthBase = Math.max(healthMinAnnualVZ, healthVZ);
+  const health = healthBase * s.HEALTH_RATE;
+
   const total = tax + social + health;
   return {
     tax: Math.round(tax), social: Math.round(social),
@@ -51,8 +104,10 @@ function calcPausal(income) {
   };
 }
 
-function calcPausalnlDan(income) {
-  const d = TAX.PAUSALNI_DAN;
+function calcPausalnlDan(income, year = 2026) {
+  const p = getTaxParams(year);
+  const d = p.PAUSALNI_DAN;
+  // Paušální daň eligibility: income ≤ 2 000 000 and specific band rules
   const band = income <= d.band1.max ? d.band1
     : income <= d.band2.max ? d.band2
     : income <= d.band3.max ? d.band3 : null;
@@ -1128,16 +1183,16 @@ async function showSummary(ctx) {
   const currentYear = new Date().getFullYear();
   const maxMonth = year < currentYear ? 12 : year === currentYear ? new Date().getMonth() + 1 : 12;
 
-  let chart = '';
+  let chart = '📊\n';
   const max = Math.max(...s.monthly.map(m => parseFloat(m.total)), 1);
   for (let m = 1; m <= maxMonth; m++) {
     const row = s.monthly.find(r => parseInt(r.month) === m);
     const total = row ? parseFloat(row.total) : 0;
     const bars = total > 0 ? Math.max(1, Math.round((total / max) * 8)) : 0;
-    chart += `${t.months[m].padEnd(4)} ${'█'.repeat(bars)}${'░'.repeat(8-bars)} ${czk(total)}\n`;
+    chart += `${String(t.months[m]).padEnd(4)} ${'█'.repeat(bars)}${'░'.repeat(8-bars)} ${czk(total)}\n`;
   }
 
-  const tax = calcPausal(s.income);
+  const tax = calcPausal(s.income, year);
   const kb = new InlineKeyboard()
     .text(t.compareMethods, 'calc_tax');
 
@@ -1176,8 +1231,8 @@ async function showTax(ctx) {
   const annual = isPast ? ytd : (ytd / month) * 12;
   const annualLine = isPast ? t.taxAnnualFull(Math.round(annual)) : t.taxAnnual(Math.round(annual), month);
 
-  const pv = calcPausal(annual);
-  const pd = calcPausalnlDan(annual);
+  const pv = calcPausal(annual, year);
+  const pd = calcPausalnlDan(annual, year);
 
   let text = t.taxTitle(year) + annualLine + t.taxPausal(pv);
   if (pd) {
