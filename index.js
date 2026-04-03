@@ -661,6 +661,12 @@ const T = {
 
     months: ['','Led','Úno','Bře','Dub','Kvě','Čvn','Čvc','Srp','Zář','Říj','Lis','Pro'],
     langChanged: '🇨🇿 Jazyk: čeština',
+    resetConfirm:  '⚠️ *Opravdu smazat VŠECHNA data?*\nPříjmy, výdaje, kilometry — vše bude nenávratně odstraněno.',
+    resetDone:     (n) => `🗑️ Hotovo — smazáno *${n}* záznamů.\nMůžeš začít znovu.`,
+    resetEmpty:    '📭 Žádná data k smazání.',
+    resetCancelled:'✅ Zrušeno, data zůstávají.',
+    resetYes:      '🗑️ Ano, smazat vše',
+    resetNo:       '↩️ Ne, ponechat',
     helpText:
       `❓ *Jak mě používat*\n\n` +
       `*Rychlý vstup (napiš zprávu):*\n` +
@@ -672,7 +678,7 @@ const T = {
       `\`vydaj 800 benzin nov 2025\`\n` +
       `\`150km Brno 3/2025\`\n\n` +
       `*Nebo použij tlačítka* — povedou tě krok za krokem s kalendářem pro výběr data.\n\n` +
-      `*Příkazy:*\n/start — hlavní menu\n/prehled — přehled\n/dane — daně`,
+      `*Příkazy:*\n/start — hlavní menu\n/prehled — přehled\n/dane — daně\n/reset — smazat všechna data`,
   },
 
   en: {
@@ -771,6 +777,12 @@ const T = {
 
     months: ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'],
     langChanged: '🇬🇧 Language: English',
+    resetConfirm:  '⚠️ *Delete ALL your data?*\nIncome, expenses, mileage — everything will be permanently removed.',
+    resetDone:     (n) => `🗑️ Done — deleted *${n}* entries.\nYou can start fresh.`,
+    resetEmpty:    '📭 No data to delete.',
+    resetCancelled:'✅ Cancelled, your data is safe.',
+    resetYes:      '🗑️ Yes, delete all',
+    resetNo:       '↩️ No, keep it',
     helpText:
       `❓ *How to use me*\n\n` +
       `*Quick input (just type):*\n` +
@@ -782,7 +794,7 @@ const T = {
       `\`expense 800 gas nov 2025\`\n` +
       `\`150km Brno 3/2025\`\n\n` +
       `*Or use the buttons* — they guide you step by step with a calendar for date selection.\n\n` +
-      `*Commands:*\n/start — main menu\n/prehled — summary\n/dane — taxes`,
+      `*Commands:*\n/start — main menu\n/prehled — summary\n/dane — taxes\n/reset — delete all data`,
   },
 };
 
@@ -837,6 +849,16 @@ async function addMileage(tgId, km, purpose, date = null) {
 async function deleteIncomeById(id)  { await query(`DELETE FROM income WHERE id=$1`, [id]); }
 async function deleteExpenseById(id) { await query(`DELETE FROM expenses WHERE id=$1`, [id]); }
 async function deleteMileageById(id) { await query(`DELETE FROM mileage_log WHERE id=$1`, [id]); }
+
+async function deleteAllUserData(tgId) {
+  const { rows } = await query(`SELECT id FROM users WHERE telegram_id=$1`, [tgId]);
+  if (rows.length === 0) return 0;
+  const userId = rows[0].id;
+  const r1 = await query(`DELETE FROM income WHERE user_id=$1`, [userId]);
+  const r2 = await query(`DELETE FROM expenses WHERE user_id=$1`, [userId]);
+  const r3 = await query(`DELETE FROM mileage_log WHERE user_id=$1`, [userId]);
+  return (r1.rowCount || 0) + (r2.rowCount || 0) + (r3.rowCount || 0);
+}
 
 async function getRecentEntries(tgId, limit = 10, offset = 0) {
   const { rows } = await query(
@@ -943,6 +965,14 @@ bot.command('start', async ctx => {
 bot.command('prehled', ctx => askYear(ctx, 'sum'));
 bot.command('dane',    ctx => askYear(ctx, 'tax'));
 bot.command('help',    showHelp);
+bot.command('reset',   async ctx => {
+  const lang = getLang(ctx);
+  const t = T[lang];
+  const kb = new InlineKeyboard()
+    .text(t.resetYes, 'reset_yes')
+    .text(t.resetNo,  'reset_no');
+  await ctx.reply(t.resetConfirm, { parse_mode: 'Markdown', reply_markup: kb });
+});
 bot.command('menu',    async ctx => {
   ctx.session.wizard = null;
   await ctx.reply('📋', { reply_markup: mainMenu(getLang(ctx)) });
@@ -980,6 +1010,32 @@ bot.callbackQuery('toggle_lang', async ctx => {
   const next = getLang(ctx) === 'cs' ? 'en' : 'cs';
   ctx.session.lang = next;
   await ctx.reply(T[next].langChanged, { reply_markup: mainMenu(next) });
+});
+
+// ── Reset data ──
+bot.callbackQuery('reset_yes', async ctx => {
+  await ctx.answerCallbackQuery();
+  const lang = getLang(ctx);
+  const t = T[lang];
+  try { await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard() }); } catch (e) {}
+  try {
+    const count = await deleteAllUserData(ctx.from.id);
+    if (count > 0) {
+      await ctx.reply(t.resetDone(count), { parse_mode: 'Markdown', reply_markup: mainMenu(lang) });
+    } else {
+      await ctx.reply(t.resetEmpty, { reply_markup: mainMenu(lang) });
+    }
+  } catch (err) {
+    console.error('Reset error:', err);
+    await ctx.reply('❌ Error resetting data.');
+  }
+});
+
+bot.callbackQuery('reset_no', async ctx => {
+  await ctx.answerCallbackQuery();
+  const lang = getLang(ctx);
+  try { await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard() }); } catch (e) {}
+  await ctx.reply(T[lang].resetCancelled, { reply_markup: mainMenu(lang) });
 });
 
 // ── Wizard: start flows ──
@@ -1435,59 +1491,3 @@ async function showSummary(ctx) {
     t.summaryIncome(s.income, s.count) +
     t.summaryExpenses(s.expenses) +
     `\`\`\`\n${chart}\`\`\`\n` +
-    t.summaryTaxHdr +
-    t.summaryTax(tax),
-    { parse_mode: 'Markdown', reply_markup: kb }
-  );
-}
-
-async function showTax(ctx) {
-  const lang = getLang(ctx);
-  const t = T[lang];
-  const year = getYear(ctx);
-  const currentYear = new Date().getFullYear();
-  const month = new Date().getMonth() + 1;
-
-  const { rows } = await query(
-    `SELECT COALESCE(SUM(i.amount),0) AS total FROM income i JOIN users u ON u.id=i.user_id WHERE u.telegram_id=$1 AND i.year=$2`,
-    [ctx.from.id, year]
-  );
-  const ytd = parseFloat(rows[0].total);
-  if (ytd === 0) return ctx.reply(t.noIncome(year), { parse_mode: 'Markdown', reply_markup: mainMenu(lang) });
-
-  const isPast = year < currentYear;
-  const annual = isPast ? ytd : (ytd / month) * 12;
-  const annualLine = isPast ? t.taxAnnualFull(Math.round(annual)) : t.taxAnnual(Math.round(annual), month);
-
-  const pv = calcPausal(annual, year);
-  const pd = calcPausalnlDan(annual, year);
-
-  let text = t.taxTitle(year) + annualLine + t.taxPausal(pv);
-  if (pd) {
-    const better = pd.net > pv.net ? t.taxBetter : '';
-    text += t.taxFlat(pd, better);
-    const savings = Math.abs(pd.net - pv.net);
-    text += t.taxWinner(pd.net > pv.net ? t.taxFlat1 : t.taxPausal1, savings);
-  }
-  text += t.taxWarning;
-
-  const kb = new InlineKeyboard();
-  for (const y of [2024, 2025, 2026]) {
-    if (y !== year) kb.text(t.switchYear(y), `tax_${y}`);
-  }
-  kb.row().text(t.backToMenu, 'back_menu');
-
-  await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: kb });
-}
-
-async function showHelp(ctx) {
-  const lang = getLang(ctx);
-  await ctx.reply(T[lang].helpText, { parse_mode: 'Markdown', reply_markup: mainMenu(lang) });
-}
-
-// ═══════════════════════════════════════════════════════════════
-// ██  BOOT  ██
-// ═══════════════════════════════════════════════════════════════
-bot.catch(err => console.error('Bot error:', err));
-console.log('🇨🇿 Daňový Pomocník v2.0 starting...');
-bot.start();
