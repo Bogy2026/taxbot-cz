@@ -682,7 +682,10 @@ const T = {
     pickYear:       '📅 Vyber rok:',
     summaryTitle:   (year) => `📊 *Přehled ${year}*\n━━━━━━━━━━━━━━━━\n`,
     summaryIncome:  (total, count) => `💰 Příjmy: *${czk(total)}* (${count} faktur)\n`,
-    summaryExpenses:(total) => `🧾 Výdaje: *${czk(total)}*\n\n`,
+    summaryExpenses:(total) => `🧾 Výdaje: *${czk(total)}*\n`,
+    summaryNet:     (net) => net >= 0
+      ? `📈 Zisk: *${czk(net)}*\n\n`
+      : `📉 Ztráta: *${czk(net)}*\n\n`,
     summaryTaxHdr:  '🧮 *Odhadované odvody:*\n',
     summaryTax:     (tax) => `• Daň: ${czk(tax.tax)}\n• Sociální: ${czk(tax.social)}\n• Zdravotní: ${czk(tax.health)}\n• Celkem: *${czk(tax.total)}*\n• Čistý příjem: *${czk(tax.net)}*`,
     compareMethods: '🧮 Porovnat metody',
@@ -810,7 +813,10 @@ const T = {
     pickYear:       '📅 Pick a year:',
     summaryTitle:   (year) => `📊 *Summary ${year}*\n━━━━━━━━━━━━━━━━\n`,
     summaryIncome:  (total, count) => `💰 Income: *${czk(total)}* (${count} invoices)\n`,
-    summaryExpenses:(total) => `🧾 Expenses: *${czk(total)}*\n\n`,
+    summaryExpenses:(total) => `🧾 Expenses: *${czk(total)}*\n`,
+    summaryNet:     (net) => net >= 0
+      ? `📈 Profit: *${czk(net)}*\n\n`
+      : `📉 Loss: *${czk(net)}*\n\n`,
     summaryTaxHdr:  '🧮 *Estimated levies:*\n',
     summaryTax:     (tax) => `• Income tax: ${czk(tax.tax)}\n• Social: ${czk(tax.social)}\n• Health: ${czk(tax.health)}\n• Total: *${czk(tax.total)}*\n• Net income: *${czk(tax.net)}*`,
     compareMethods: '🧮 Compare methods',
@@ -952,11 +958,19 @@ async function getSummary(tgId, year) {
     `SELECT COALESCE(SUM(e.amount),0) AS total FROM expenses e JOIN users u ON u.id=e.user_id WHERE u.telegram_id=$1 AND e.year=$2`,
     [tgId, year]
   );
-  const { rows: monthly } = await query(
+  const { rows: monthlyInc } = await query(
     `SELECT month, COALESCE(SUM(amount),0) AS total FROM income i JOIN users u ON u.id=i.user_id WHERE u.telegram_id=$1 AND i.year=$2 GROUP BY month ORDER BY month`,
     [tgId, year]
   );
-  return { income: parseFloat(inc[0].total), count: parseInt(inc[0].cnt), expenses: parseFloat(exp[0].total), monthly };
+  const { rows: monthlyExp } = await query(
+    `SELECT month, COALESCE(SUM(amount),0) AS total FROM expenses e JOIN users u ON u.id=e.user_id WHERE u.telegram_id=$1 AND e.year=$2 GROUP BY month ORDER BY month`,
+    [tgId, year]
+  );
+  return {
+    income: parseFloat(inc[0].total), count: parseInt(inc[0].cnt),
+    expenses: parseFloat(exp[0].total),
+    monthlyInc, monthlyExp,
+  };
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1570,13 +1584,34 @@ async function showSummary(ctx) {
   const currentYear = new Date().getFullYear();
   const maxMonth = year < currentYear ? 12 : year === currentYear ? new Date().getMonth() + 1 : 12;
 
-  let chart = '📊\n';
-  const max = Math.max(...s.monthly.map(m => parseFloat(m.total)), 1);
+  let chart = '';
+  const allInc = s.monthlyInc.map(m => parseFloat(m.total));
+  const allExp = s.monthlyExp.map(m => parseFloat(m.total));
+  const maxVal = Math.max(...allInc, ...allExp, 1);
+
   for (let m = 1; m <= maxMonth; m++) {
-    const row = s.monthly.find(r => parseInt(r.month) === m);
-    const total = row ? parseFloat(row.total) : 0;
-    const bars = total > 0 ? Math.max(1, Math.round((total / max) * 8)) : 0;
-    chart += `${String(t.months[m]).padEnd(4)} ${'█'.repeat(bars)}${'░'.repeat(8-bars)} ${czk(total)}\n`;
+    const incRow = s.monthlyInc.find(r => parseInt(r.month) === m);
+    const expRow = s.monthlyExp.find(r => parseInt(r.month) === m);
+    const inc = incRow ? parseFloat(incRow.total) : 0;
+    const exp = expRow ? parseFloat(expRow.total) : 0;
+    const net = inc - exp;
+
+    const mLabel = String(t.months[m]).padEnd(4);
+
+    if (inc === 0 && exp === 0) {
+      chart += `${mLabel} ░░░░░░░░\n`;
+    } else {
+      const incBars = inc > 0 ? Math.max(1, Math.round((inc / maxVal) * 7)) : 0;
+      const expBars = exp > 0 ? Math.max(1, Math.round((exp / maxVal) * 7)) : 0;
+      if (inc > 0) {
+        chart += `${mLabel} +${'▓'.repeat(incBars)}${'░'.repeat(7 - incBars)} ${czk(inc)}\n`;
+      }
+      if (exp > 0) {
+        // If no income line, use month label; otherwise indent
+        const prefix = inc > 0 ? '     ' : mLabel + ' ';
+        chart += `${prefix}-${'▒'.repeat(expBars)}${'░'.repeat(7 - expBars)} ${czk(exp)}\n`;
+      }
+    }
   }
 
   const tax = calcPausal(s.income, year, getActivity(ctx));
@@ -1590,11 +1625,15 @@ async function showSummary(ctx) {
   }
   kb.row().text(t.backToMenu, 'back_menu');
 
+  const netProfit = s.income - s.expenses;
+
   await ctx.reply(
     t.summaryTitle(year) + actNote + '\n' +
     t.summaryIncome(s.income, s.count) +
     t.summaryExpenses(s.expenses) +
+    t.summaryNet(netProfit) +
     `\`\`\`\n${chart}\`\`\`\n` +
+    (lang === 'cs' ? '▓ příjmy  ▒ výdaje\n\n' : '▓ income  ▒ expenses\n\n') +
     t.summaryTaxHdr +
     t.summaryTax(tax),
     { parse_mode: 'Markdown', reply_markup: kb }
