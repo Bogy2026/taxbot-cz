@@ -142,6 +142,58 @@ function calcPausal(income, year = 2026, activity = 'hlavni') {
   };
 }
 
+/**
+ * Calculate taxes using ACTUAL (real) expenses.
+ * Same insurance logic as calcPausal, but uses real expense amount.
+ */
+function calcActual(income, actualExpenses, year = 2026, activity = 'hlavni') {
+  const p = getTaxParams(year);
+  const s = TAX_SHARED;
+  const isVedlejsi = activity === 'vedlejsi';
+
+  const base = Math.floor(Math.max(0, income - actualExpenses) / 100) * 100;
+
+  let tax = base <= p.HIGH_RATE_THRESHOLD
+    ? base * s.INCOME_TAX_RATE
+    : p.HIGH_RATE_THRESHOLD * s.INCOME_TAX_RATE + (base - p.HIGH_RATE_THRESHOLD) * s.HIGH_RATE;
+  tax = Math.max(0, tax - p.BASIC_DEDUCTION);
+
+  let social = 0;
+  if (isVedlejsi) {
+    if (base > p.VEDLEJSI_ROZHODNA_CASTKA) {
+      const socialVZ = base * s.SOCIAL_VZ_RATIO;
+      const socialMinAnnualVZ = p.VEDLEJSI_SOCIAL_MIN_MONTHLY_VZ * 12;
+      const socialBase = Math.min(p.SOCIAL_MAX_ANNUAL_VZ, Math.max(socialMinAnnualVZ, socialVZ));
+      social = socialBase * s.SOCIAL_RATE;
+    }
+  } else {
+    const socialVZ = base * s.SOCIAL_VZ_RATIO;
+    const socialMinAnnualVZ = p.SOCIAL_MIN_MONTHLY_VZ * 12;
+    const socialBase = Math.min(p.SOCIAL_MAX_ANNUAL_VZ, Math.max(socialMinAnnualVZ, socialVZ));
+    social = socialBase * s.SOCIAL_RATE;
+  }
+
+  let health = 0;
+  if (isVedlejsi) {
+    const healthVZ = base * s.HEALTH_VZ_RATIO;
+    health = healthVZ * s.HEALTH_RATE;
+  } else {
+    const healthVZ = base * s.HEALTH_VZ_RATIO;
+    const healthMinAnnualVZ = p.HEALTH_MIN_MONTHLY_VZ * 12;
+    const healthBase = Math.max(healthMinAnnualVZ, healthVZ);
+    health = healthBase * s.HEALTH_RATE;
+  }
+
+  const total = tax + social + health;
+  return {
+    tax: Math.round(tax), social: Math.round(social),
+    health: Math.round(health), total: Math.round(total),
+    net: Math.round(income - total),
+    rate: income > 0 ? (total / income * 100).toFixed(1) : 0,
+    base,
+  };
+}
+
 function calcPausalnlDan(income, year = 2026) {
   const p = getTaxParams(year);
   const d = p.PAUSALNI_DAN;
@@ -695,12 +747,14 @@ const T = {
     taxTitle:       (year) => `🧮 *Porovnání daní — ${year}*\n`,
     taxAnnual:      (amount, m) => `📈 Roční odhad (z ${m} měs.): *${czk(amount)}*\n━━━━━━━━━━━━━━━━\n\n`,
     taxAnnualFull:  (amount) => `📈 Roční příjem: *${czk(amount)}*\n━━━━━━━━━━━━━━━━\n\n`,
-    taxPausal:      (pv) => `1️⃣ *Paušální výdaje 60 %*\n   Odvody: ${czk(pv.total)} | Sazba: ${pv.rate} %\n   💵 Čistý: *${czk(pv.net)}*\n\n`,
-    taxFlat:        (pd, better) => `2️⃣ *Paušální daň* ${better}\n   ${czk(pd.monthly)}/měs → ${czk(pd.annual)}/rok\n   💵 Čistý: *${czk(pd.net)}* | Bez přiznání!\n\n`,
+    taxPausal:      (pv) => `1️⃣ *Paušální výdaje 60 %*\n   Základ daně: ${czk(pv.base)}\n   Odvody: ${czk(pv.total)} | Sazba: ${pv.rate} %\n   💵 Čistý: *${czk(pv.net)}*\n\n`,
+    taxActual:      (av, expenses) => `2️⃣ *Skutečné výdaje*\n   Výdaje: ${czk(expenses)} (${av.expPct})\n   Základ daně: ${czk(av.base)}\n   Odvody: ${czk(av.total)} | Sazba: ${av.rate} %\n   💵 Čistý: *${czk(av.net)}*\n\n`,
+    taxFlat:        (pd, better) => `3️⃣ *Paušální daň* ${better}\n   ${czk(pd.monthly)}/měs → ${czk(pd.annual)}/rok\n   💵 Čistý: *${czk(pd.net)}* | Bez přiznání!\n\n`,
     taxBetter:      '✅ Lepší!',
     taxWinner:      (method, savings) => `━━━━━━━━━━━━━━━━\n🏆 *Lepší: ${method}*\n💡 Rozdíl: *${czk(savings)}* / rok\n\n`,
     taxFlat1:       'Paušální daň',
-    taxPausal1:     'Paušální výdaje',
+    taxPausal1:     'Paušální výdaje 60 %',
+    taxActual1:     'Skutečné výdaje',
     taxWarning:     '⚠️ Odhad. Poraď se s účetní/m.',
     vedlejsiInfo:   (base, limit, paysSocial) => paysSocial
       ? `📋 Základ daně: *${czk(base)}* > rozhodná částka ${czk(limit)}\n→ Sociální pojištění se *platí*\n\n`
@@ -825,12 +879,14 @@ const T = {
     taxTitle:       (year) => `🧮 *Tax comparison — ${year}*\n`,
     taxAnnual:      (amount, m) => `📈 Annual projection (${m}-month basis): *${czk(amount)}*\n━━━━━━━━━━━━━━━━\n\n`,
     taxAnnualFull:  (amount) => `📈 Full-year income: *${czk(amount)}*\n━━━━━━━━━━━━━━━━\n\n`,
-    taxPausal:      (pv) => `1️⃣ *Flat-rate expenses 60 %*\n   Levies: ${czk(pv.total)} | Rate: ${pv.rate} %\n   💵 Net: *${czk(pv.net)}*\n\n`,
-    taxFlat:        (pd, better) => `2️⃣ *Flat-rate tax* ${better}\n   ${czk(pd.monthly)}/mo → ${czk(pd.annual)}/yr\n   💵 Net: *${czk(pd.net)}* | No tax return!\n\n`,
+    taxPausal:      (pv) => `1️⃣ *Flat-rate expenses 60 %*\n   Tax base: ${czk(pv.base)}\n   Levies: ${czk(pv.total)} | Rate: ${pv.rate} %\n   💵 Net: *${czk(pv.net)}*\n\n`,
+    taxActual:      (av, expenses) => `2️⃣ *Actual expenses*\n   Expenses: ${czk(expenses)} (${av.expPct})\n   Tax base: ${czk(av.base)}\n   Levies: ${czk(av.total)} | Rate: ${av.rate} %\n   💵 Net: *${czk(av.net)}*\n\n`,
+    taxFlat:        (pd, better) => `3️⃣ *Flat-rate tax* ${better}\n   ${czk(pd.monthly)}/mo → ${czk(pd.annual)}/yr\n   💵 Net: *${czk(pd.net)}* | No tax return!\n\n`,
     taxBetter:      '✅ Better!',
     taxWinner:      (method, savings) => `━━━━━━━━━━━━━━━━\n🏆 *Better for you: ${method}*\n💡 Difference: *${czk(savings)}* / year\n\n`,
     taxFlat1:       'Flat-rate tax',
-    taxPausal1:     'Flat-rate expenses',
+    taxPausal1:     'Flat-rate expenses 60 %',
+    taxActual1:     'Actual expenses',
     taxWarning:     '⚠️ Estimate only. Consult an accountant.',
     vedlejsiInfo:   (base, limit, paysSocial) => paysSocial
       ? `📋 Tax base: *${czk(base)}* > threshold ${czk(limit)}\n→ Social insurance *applies*\n\n`
@@ -1614,8 +1670,21 @@ async function showSummary(ctx) {
     }
   }
 
-  const tax = calcPausal(s.income, year, getActivity(ctx));
-  const actNote = t.actNote(getActivity(ctx));
+  const activity = getActivity(ctx);
+  const actNote = t.actNote(activity);
+
+  // Calculate both methods, pick the best for summary display
+  const pvTax = calcPausal(s.income, year, activity);
+  let bestTax = pvTax;
+  let bestMethodName = t.taxPausal1;
+  if (s.expenses > 0) {
+    const avTax = calcActual(s.income, s.expenses, year, activity);
+    if (avTax.net > pvTax.net) {
+      bestTax = avTax;
+      bestMethodName = t.taxActual1;
+    }
+  }
+
   const kb = new InlineKeyboard()
     .text(t.compareMethods, 'calc_tax');
 
@@ -1635,7 +1704,8 @@ async function showSummary(ctx) {
     `\`\`\`\n${chart}\`\`\`\n` +
     (lang === 'cs' ? '▓ příjmy  ▒ výdaje\n\n' : '▓ income  ▒ expenses\n\n') +
     t.summaryTaxHdr +
-    t.summaryTax(tax),
+    (lang === 'cs' ? `_Metoda: ${bestMethodName}_\n` : `_Method: ${bestMethodName}_\n`) +
+    t.summaryTax(bestTax),
     { parse_mode: 'Markdown', reply_markup: kb }
   );
 }
@@ -1647,40 +1717,78 @@ async function showTax(ctx) {
   const currentYear = new Date().getFullYear();
   const month = new Date().getMonth() + 1;
 
-  const { rows } = await query(
+  // ── Fetch income ──
+  const { rows: incRows } = await query(
     `SELECT COALESCE(SUM(i.amount),0) AS total FROM income i JOIN users u ON u.id=i.user_id WHERE u.telegram_id=$1 AND i.year=$2`,
     [ctx.from.id, year]
   );
-  const ytd = parseFloat(rows[0].total);
+  const ytd = parseFloat(incRows[0].total);
   if (ytd === 0) return ctx.reply(t.noIncome(year), { parse_mode: 'Markdown', reply_markup: mainMenu(lang, getActivity(ctx)) });
 
+  // ── Fetch actual expenses ──
+  const { rows: expRows } = await query(
+    `SELECT COALESCE(SUM(e.amount),0) AS total FROM expenses e JOIN users u ON u.id=e.user_id WHERE u.telegram_id=$1 AND e.year=$2`,
+    [ctx.from.id, year]
+  );
+  const actualExp = parseFloat(expRows[0].total);
+
   const isPast = year < currentYear;
-  const annual = isPast ? ytd : (ytd / month) * 12;
-  const annualLine = isPast ? t.taxAnnualFull(Math.round(annual)) : t.taxAnnual(Math.round(annual), month);
+  const annualIncome = isPast ? ytd : (ytd / month) * 12;
+  const annualExpenses = isPast ? actualExp : (actualExp / month) * 12;
+  const annualLine = isPast ? t.taxAnnualFull(Math.round(annualIncome)) : t.taxAnnual(Math.round(annualIncome), month);
 
   const activity = getActivity(ctx);
   const actNote = t.actNote(activity);
-  const pv = calcPausal(annual, year, activity);
-  // Paušální daň is NOT available for vedlejší (they have other income sources)
-  const pd = activity === 'vedlejsi' ? null : calcPausalnlDan(annual, year);
 
+  // ── Calculate all methods ──
+  const pv = calcPausal(annualIncome, year, activity);
+  const av = calcActual(annualIncome, annualExpenses, year, activity);
+  av.expPct = annualIncome > 0 ? `${(annualExpenses / annualIncome * 100).toFixed(0)} %` : '0 %';
+  const pd = activity === 'vedlejsi' ? null : calcPausalnlDan(annualIncome, year);
+
+  // ── Build comparison text ──
   let text = t.taxTitle(year) + actNote + '\n' + annualLine;
 
-  // Show vedlejší social threshold info
+  // Vedlejší social threshold note
   if (activity === 'vedlejsi') {
     const p = getTaxParams(year);
-    const base = Math.floor(Math.max(0, annual * (1 - 0.60)) / 100) * 100;
-    text += t.vedlejsiInfo(base, p.VEDLEJSI_ROZHODNA_CASTKA, pv.social > 0);
+    text += t.vedlejsiInfo(pv.base, p.VEDLEJSI_ROZHODNA_CASTKA, pv.social > 0);
   }
 
+  // Method 1: Flat-rate 60 %
   text += t.taxPausal(pv);
 
-  if (pd) {
-    const better = pd.net > pv.net ? t.taxBetter : '';
-    text += t.taxFlat(pd, better);
-    const savings = Math.abs(pd.net - pv.net);
-    text += t.taxWinner(pd.net > pv.net ? t.taxFlat1 : t.taxPausal1, savings);
+  // Method 2: Actual expenses (only show if user has tracked expenses)
+  if (actualExp > 0) {
+    text += t.taxActual(av, Math.round(annualExpenses));
   }
+
+  // Method 3: Paušální daň (hlavní only)
+  if (pd) {
+    text += t.taxFlat(pd, '');
+  }
+
+  // ── Find the winner ──
+  const methods = [
+    { name: t.taxPausal1, net: pv.net, total: pv.total },
+  ];
+  if (actualExp > 0) {
+    methods.push({ name: t.taxActual1, net: av.net, total: av.total });
+  }
+  if (pd) {
+    methods.push({ name: t.taxFlat1, net: pd.net, total: pd.annual });
+  }
+
+  // Sort by highest net (= lowest levies = best for user)
+  methods.sort((a, b) => b.net - a.net);
+  const best = methods[0];
+  const worst = methods[methods.length - 1];
+  const savings = Math.abs(best.net - worst.net);
+
+  if (methods.length > 1 && savings > 0) {
+    text += t.taxWinner(best.name, savings);
+  }
+
   text += t.taxWarning;
 
   const kb = new InlineKeyboard();
