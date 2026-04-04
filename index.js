@@ -155,7 +155,13 @@ function calcPausalnlDan(income, year = 2026) {
 }
 
 function czk(n) {
-  return new Intl.NumberFormat('cs-CZ', { style: 'currency', currency: 'CZK', maximumFractionDigits: 0 }).format(n);
+  const hasDecimals = n % 1 !== 0;
+  return new Intl.NumberFormat('cs-CZ', {
+    style: 'currency',
+    currency: 'CZK',
+    minimumFractionDigits: hasDecimals ? 2 : 0,
+    maximumFractionDigits: hasDecimals ? 2 : 0,
+  }).format(n);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -710,6 +716,8 @@ const T = {
     resetNo:       '↩️ Ne, ponechat',
     actHlavni:     'Hlavní činnost',
     actVedlejsi:   'Vedlejší činnost',
+    actSwitchToVedlejsi: '⚙️ Činnost: Hlavní → Přepnout na vedlejší',
+    actSwitchToHlavni:   '⚙️ Činnost: Vedlejší → Přepnout na hlavní',
     actChanged:    (act) => act === 'vedlejsi'
       ? '✅ Nastaveno: *vedlejší činnost*\nSociální pojištění se platí jen při zisku nad rozhodnou částku. Zdravotní z reálných příjmů.'
       : '✅ Nastaveno: *hlavní činnost*\nMinimální odvody se platí i při nulovém příjmu.',
@@ -835,6 +843,8 @@ const T = {
     resetNo:       '↩️ No, keep it',
     actHlavni:     'Primary activity',
     actVedlejsi:   'Secondary activity',
+    actSwitchToVedlejsi: '⚙️ Activity: Primary → Switch to secondary',
+    actSwitchToHlavni:   '⚙️ Activity: Secondary → Switch to primary',
     actChanged:    (act) => act === 'vedlejsi'
       ? '✅ Set to: *secondary activity*\nSocial insurance only above income threshold. Health from actual income.'
       : '✅ Set to: *primary activity*\nMinimum levies apply even with zero income.',
@@ -975,13 +985,16 @@ const getActivity = (ctx) => ctx.session?.activity || 'hlavni';
 // ═══════════════════════════════════════════════════════════════
 const mainMenu = (lang, activity = 'hlavni') => {
   const m = T[lang].menu;
-  const actLabel = activity === 'vedlejsi' ? T[lang].actVedlejsi : T[lang].actHlavni;
+  // Show what tapping SWITCHES TO, not current state
+  const actLabel = activity === 'hlavni'
+    ? T[lang].actSwitchToVedlejsi   // currently hlavní → button says "switch to vedlejší"
+    : T[lang].actSwitchToHlavni;    // currently vedlejší → button says "switch to hlavní"
   return new InlineKeyboard()
     .text(m.income,  'add_income').text(m.expense, 'add_expense').row()
     .text(m.km,      'add_km').row()
     .text(m.summary, 'summary').text(m.tax, 'calc_tax').row()
     .text(m.entries, 'entries').row()
-    .text(`⚙️ ${actLabel}`, 'toggle_activity').row()
+    .text(actLabel, 'toggle_activity').row()
     .text(m.help,    'help').text(m.lang, 'toggle_lang').row();
 };
 
@@ -1446,8 +1459,15 @@ bot.on('message:text', async ctx => {
 
   if (intent.type === 'km') {
     const purpose = intent.purpose || t.kmDefault;
-    await addMileage(ctx.from.id, intent.km, purpose, intent.date);
-    return ctx.reply(t.kmSaved(intent.km, purpose, intent.dateLabel), { parse_mode: 'Markdown' });
+    if (intent.date) {
+      // Date in text → save directly
+      await addMileage(ctx.from.id, intent.km, purpose, intent.date);
+      return ctx.reply(t.kmSaved(intent.km, purpose, intent.dateLabel), { parse_mode: 'Markdown' });
+    }
+    // No date → wizard for date
+    const now = new Date();
+    ctx.session.wizard = { step: 'date', type: 'km', amount: intent.km, desc: purpose, calYear: now.getFullYear(), calMonth: now.getMonth() + 1 };
+    return ctx.reply(t.wizPickDate, { parse_mode: 'Markdown', reply_markup: buildMonthPicker(now.getFullYear(), lang) });
   }
 
   if (intent.type === 'km_error') {
@@ -1460,22 +1480,36 @@ bot.on('message:text', async ctx => {
 
   if (intent.type === 'expense') {
     const desc = intent.desc || t.expenseDefault;
-    const id = await addExpense(ctx.from.id, intent.amount, desc, intent.date);
-    ctx.session.lastEntry = { type: 'expense', id, amount: intent.amount, desc, date: intent.date };
-    return ctx.reply(
-      t.expenseSaved(intent.amount, desc, intent.dateLabel),
-      { parse_mode: 'Markdown', reply_markup: expenseKeyboard(lang) }
-    );
+    if (intent.date) {
+      // Date in text → save directly
+      const id = await addExpense(ctx.from.id, intent.amount, desc, intent.date);
+      ctx.session.lastEntry = { type: 'expense', id, amount: intent.amount, desc, date: intent.date };
+      return ctx.reply(
+        t.expenseSaved(intent.amount, desc, intent.dateLabel),
+        { parse_mode: 'Markdown', reply_markup: expenseKeyboard(lang) }
+      );
+    }
+    // No date → wizard for date
+    const now = new Date();
+    ctx.session.wizard = { step: 'date', type: 'expense', amount: intent.amount, desc, calYear: now.getFullYear(), calMonth: now.getMonth() + 1 };
+    return ctx.reply(t.wizPickDate, { parse_mode: 'Markdown', reply_markup: buildMonthPicker(now.getFullYear(), lang) });
   }
 
   if (intent.type === 'income') {
     const desc = intent.desc || t.incomeDefault;
-    const id = await addIncome(ctx.from.id, intent.amount, desc, intent.date);
-    ctx.session.lastEntry = { type: 'income', id, amount: intent.amount, desc, date: intent.date };
-    return ctx.reply(
-      t.incomeSaved(intent.amount, desc, intent.dateLabel),
-      { parse_mode: 'Markdown', reply_markup: incomeKeyboard(lang) }
-    );
+    if (intent.date) {
+      // Date in text → save directly
+      const id = await addIncome(ctx.from.id, intent.amount, desc, intent.date);
+      ctx.session.lastEntry = { type: 'income', id, amount: intent.amount, desc, date: intent.date };
+      return ctx.reply(
+        t.incomeSaved(intent.amount, desc, intent.dateLabel),
+        { parse_mode: 'Markdown', reply_markup: incomeKeyboard(lang) }
+      );
+    }
+    // No date → wizard for date
+    const now = new Date();
+    ctx.session.wizard = { step: 'date', type: 'income', amount: intent.amount, desc, calYear: now.getFullYear(), calMonth: now.getMonth() + 1 };
+    return ctx.reply(t.wizPickDate, { parse_mode: 'Markdown', reply_markup: buildMonthPicker(now.getFullYear(), lang) });
   }
 
   // ── Unknown → show menu ──
