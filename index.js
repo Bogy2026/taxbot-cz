@@ -753,8 +753,8 @@ const T = {
     taxProfit:      (income, expenses, levies, profit) =>
       `━━━━━━━━━━━━━━━━\n` +
       `💰 Příjmy: ${czk(income)}\n` +
-      `🧾 Výdaje: ${czk(expenses)}\n` +
-      `🏛️ Odvody: ${czk(levies)}\n` +
+      `🧾 Výdaje: −${czk(expenses)}\n` +
+      `📋 Odvody: −${czk(levies)}\n` +
       `━━━━━━━━━━━━━━━━\n` +
       `💵 *Čistý zisk: ${czk(profit)}*\n\n`,
     taxBetter:      '✅ Lepší!',
@@ -878,22 +878,22 @@ const T = {
     summaryNet:     (net) => net >= 0
       ? `📈 Profit: *${czk(net)}*\n\n`
       : `📉 Loss: *${czk(net)}*\n\n`,
-    summaryTaxHdr:  '🧮 *Estimated levies:*\n',
-    summaryTax:     (tax) => `• Income tax: ${czk(tax.tax)}\n• Social: ${czk(tax.social)}\n• Health: ${czk(tax.health)}\n• *Total levies: ${czk(tax.total)}*`,
+    summaryTaxHdr:  '🧮 *Estimated tax & insurance:*\n',
+    summaryTax:     (tax) => `• Income tax: ${czk(tax.tax)}\n• Social: ${czk(tax.social)}\n• Health: ${czk(tax.health)}\n• *Total: ${czk(tax.total)}*`,
     compareMethods: '🧮 Compare methods',
 
     noIncome:       (year) => `📭 No income in ${year}.\nAdd via menu or type: \`25000 invoice\``,
     taxTitle:       (year) => `🧮 *Tax comparison — ${year}*\n`,
     taxAnnual:      (amount, m) => `📈 Annual projection (${m}-month basis): *${czk(amount)}*\n━━━━━━━━━━━━━━━━\n\n`,
     taxAnnualFull:  (amount) => `📈 Full-year income: *${czk(amount)}*\n━━━━━━━━━━━━━━━━\n\n`,
-    taxPausal:      (pv) => `1️⃣ *Flat-rate expenses 60 %*\n   Tax base: ${czk(pv.base)}\n   Levies: *${czk(pv.total)}*\n\n`,
-    taxActual:      (av, expenses) => `2️⃣ *Actual expenses*\n   Expenses: ${czk(expenses)} (${av.expPct})\n   Tax base: ${czk(av.base)}\n   Levies: *${czk(av.total)}*\n\n`,
+    taxPausal:      (pv) => `1️⃣ *Flat-rate expenses 60 %*\n   Tax base: ${czk(pv.base)}\n   Tax & insurance: *${czk(pv.total)}*\n\n`,
+    taxActual:      (av, expenses) => `2️⃣ *Actual expenses*\n   Expenses: ${czk(expenses)} (${av.expPct})\n   Tax base: ${czk(av.base)}\n   Tax & insurance: *${czk(av.total)}*\n\n`,
     taxFlat:        (pd, better) => `3️⃣ *Flat-rate tax* ${better}\n   ${czk(pd.monthly)}/mo → *${czk(pd.annual)}*/yr | No tax return!\n\n`,
     taxProfit:      (income, expenses, levies, profit) =>
       `━━━━━━━━━━━━━━━━\n` +
       `💰 Income: ${czk(income)}\n` +
-      `🧾 Expenses: ${czk(expenses)}\n` +
-      `🏛️ Levies: ${czk(levies)}\n` +
+      `🧾 Expenses: −${czk(expenses)}\n` +
+      `📋 Tax & insurance: −${czk(levies)}\n` +
       `━━━━━━━━━━━━━━━━\n` +
       `💵 *Take-home profit: ${czk(profit)}*\n\n`,
     taxBetter:      '✅ Better!',
@@ -1803,11 +1803,20 @@ async function showTax(ctx) {
     text += t.taxWinner(best.name, savings);
   }
 
-  // ── Show real profit breakdown using the best method ──
-  const bestLevies = best.total;
-  const realExpenses = Math.round(annualExpenses);
-  const realProfit = Math.round(annualIncome) - realExpenses - bestLevies;
-  text += t.taxProfit(Math.round(annualIncome), realExpenses, bestLevies, realProfit);
+  // ── Show real profit breakdown using ACTUAL (not projected) numbers ──
+  // For the best method, calculate levies on actual YTD income/expenses
+  let ytdLevies;
+  if (best.name === t.taxActual1 && actualExp > 0) {
+    ytdLevies = calcActual(ytd, actualExp, year, activity).total;
+  } else if (best.name === t.taxFlat1 && pd) {
+    // Paušální daň: proportional to months elapsed
+    const monthsActive = isPast ? 12 : month;
+    ytdLevies = Math.round(pd.monthly * monthsActive);
+  } else {
+    ytdLevies = calcPausal(ytd, year, activity).total;
+  }
+  const ytdProfit = Math.round(ytd) - Math.round(actualExp) - ytdLevies;
+  text += t.taxProfit(Math.round(ytd), Math.round(actualExp), ytdLevies, ytdProfit);
 
   text += t.taxWarning;
 
