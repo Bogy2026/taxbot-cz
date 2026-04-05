@@ -24,6 +24,20 @@ async function query(text, params) { return pool.query(text, params); }
 //   Health VZ  = 50 % of daňový základ
 //   23 % threshold = 36 × průměrná mzda (changed from 48× in 2024)
 //
+// FLAT-RATE EXPENSE RATES (§ 7 odst. 7 ZDP):
+//   80 % — agriculture, forestry, crafts (řemeslné živnosti)
+//   60 % — other trade licenses (živnosti) ← THIS BOT USES THIS RATE
+//   40 % — regulated professions (e.g. lawyers, consultants, authors)
+//   30 % — rental income (§ 9)
+//
+// ⚠️  LEGISLATIVE NOTE (Apr 2026):
+//   Czech parliament (Poslanecká sněmovna) approved a reduction of the
+//   2026 minimum social insurance base from 40% to 35% of avg wage
+//   (min advance: 5 005 Kč instead of 5 720 Kč for hlavní).
+//   Pending Senate & presidential signature. If enacted, affects hlavní
+//   activity minimums only. This bot currently uses the ENACTED law
+//   values (40% / 5 720 Kč). Update when amendment is signed into law.
+//
 const TAX_BY_YEAR = {
   2024: {
     PRUMERNA_MZDA: 43967,
@@ -67,6 +81,10 @@ const TAX_BY_YEAR = {
 const TAX_SHARED = {
   INCOME_TAX_RATE: 0.15,
   HIGH_RATE: 0.23,
+  // ⚠️ 60% applies to živnosti (trade licenses) ONLY.
+  // Other rates: 80% agriculture/crafts, 40% regulated professions, 30% rental.
+  // This bot does NOT support other rates — users with non-živnost income
+  // should consult a tax advisor.
   PAUSALNI_VYDAJE_RATE: 0.60, // 60 % for most OSVČ (živnosti)
   SOCIAL_RATE: 0.292,
   SOCIAL_VZ_RATIO: 0.55,     // 55 % of daňový základ since 2024
@@ -659,13 +677,13 @@ const T = {
   cs: {
     welcome: (name) =>
       `👋 Ahoj ${name}! Jsem tvůj *daňový pomocník* 🇨🇿\n\n` +
-      `Můžeš psát přirozeně nebo použít tlačítka níže.\n\n` +
-      `*Příklady:*\n` +
+      `Sleduj příjmy, výdaje a kilometry — a já ti spočítám daně.\n\n` +
+      `⚡ *Rychlý start:*\n` +
       `💰 \`25000 faktura Novák\`\n` +
       `🧾 \`vydaj 4900 notebook\`\n` +
       `🚗 \`150km Brno\`\n\n` +
-      `📅 *S datem:* \`25000 faktura 15.11.2025\`\n` +
-      `Nebo si datum vyber z kalendáře přes tlačítka.`,
+      `📅 *S datem:* \`25000 faktura 15.11.2025\`\n\n` +
+      `💡 _Tip: Čím víc záznamů přidáš, tím přesnější bude tvůj daňový odhad!_`,
     menu: {
       income:   '💰 Přidat příjem',
       expense:  '🧾 Přidat výdaj',
@@ -699,9 +717,9 @@ const T = {
     wizCancelled:   '❌ Zrušeno.',
 
     // ── Inline saves (quick text input) ──
-    incomeSaved:    (amount, desc, dl) => `💰 Příjem: *${czk(amount)}*${desc ? `\n📝 ${desc}` : ''}${dl ? `\n📅 ${dl}` : ''}`,
-    expenseSaved:   (amount, desc, dl) => `🧾 Výdaj: *${czk(amount)}*${desc ? ` — ${desc}` : ''}${dl ? `\n📅 ${dl}` : ''}`,
-    kmSaved:        (km, purpose, dl) => `✅ *${km} km* zapsáno${purpose ? ` — ${purpose}` : ''}${dl ? `\n📅 ${dl}` : ''}`,
+    incomeSaved:    (amount, desc, dl) => `✅ 💰 Příjem uložen: *${czk(amount)}*${desc ? `\n📝 ${desc}` : ''}${dl ? `\n📅 ${dl}` : ''}`,
+    expenseSaved:   (amount, desc, dl) => `✅ 🧾 Výdaj uložen: *${czk(amount)}*${desc ? ` — ${desc}` : ''}${dl ? `\n📅 ${dl}` : ''}`,
+    kmSaved:        (km, purpose, dl) => `✅ 🚗 *${km} km* zapsáno${purpose ? ` — ${purpose}` : ''}${dl ? `\n📅 ${dl}` : ''}`,
     incomeDefault:  'příjem',
     expenseDefault: 'výdaj',
     kmDefault:      'pracovní cesta',
@@ -732,12 +750,12 @@ const T = {
 
     // ── Summary ──
     pickYear:       '📅 Vyber rok:',
-    summaryTitle:   (year) => `📊 *Přehled ${year}*\n━━━━━━━━━━━━━━━━\n`,
-    summaryIncome:  (total, count) => `💰 Příjmy: *${czk(total)}* (${count} faktur)\n`,
+    summaryTitle:   (year) => `📊 *Přehled ${year}*\n━━━━━━━━━━━━━━━━━━━\n`,
+    summaryIncome:  (total, count) => `💰 Příjmy: *${czk(total)}* (${count} ${count === 1 ? 'faktura' : count < 5 ? 'faktury' : 'faktur'})\n`,
     summaryExpenses:(total) => `🧾 Výdaje: *${czk(total)}*\n`,
     summaryNet:     (net) => net >= 0
-      ? `📈 Zisk: *${czk(net)}*\n\n`
-      : `📉 Ztráta: *${czk(net)}*\n\n`,
+      ? `📈 Hrubý zisk: *${czk(net)}*\n\n`
+      : `📉 Ztráta: *${czk(net)}* 😬\n\n`,
     summaryTaxHdr:  '🧮 *Odhadované odvody:*\n',
     summaryTax:     (tax) => `• Daň: ${czk(tax.tax)}\n• Sociální: ${czk(tax.social)}\n• Zdravotní: ${czk(tax.health)}\n• *Celkem odvody: ${czk(tax.total)}*`,
     compareMethods: '🧮 Porovnat metody',
@@ -747,9 +765,9 @@ const T = {
     taxTitle:       (year) => `🧮 *Porovnání daní — ${year}*\n`,
     taxAnnual:      (amount, m) => `📈 Roční odhad (z ${m} měs.): *${czk(amount)}*\n━━━━━━━━━━━━━━━━\n\n`,
     taxAnnualFull:  (amount) => `📈 Roční příjem: *${czk(amount)}*\n━━━━━━━━━━━━━━━━\n\n`,
-    taxPausal:      (pv) => `1️⃣ *Paušální výdaje 60 %*\n   Základ daně: ${czk(pv.base)}\n   Odvody: *${czk(pv.total)}*\n\n`,
-    taxActual:      (av, expenses) => `2️⃣ *Skutečné výdaje*\n   Výdaje: ${czk(expenses)} (${av.expPct})\n   Základ daně: ${czk(av.base)}\n   Odvody: *${czk(av.total)}*\n\n`,
-    taxFlat:        (pd, better) => `3️⃣ *Paušální daň* ${better}\n   ${czk(pd.monthly)}/měs → *${czk(pd.annual)}*/rok | Bez přiznání!\n\n`,
+    taxPausal:      (pv) => `1️⃣ *Paušální výdaje 60 %*\n   📋 Základ daně: ${czk(pv.base)}\n   🏦 Daň: ${czk(pv.tax)} | Soc: ${czk(pv.social)} | Zdrav: ${czk(pv.health)}\n   💳 Odvody: *${czk(pv.total)}* (${pv.rate} %)\n\n`,
+    taxActual:      (av, expenses) => `2️⃣ *Skutečné výdaje*\n   🧾 Výdaje: ${czk(expenses)} (${av.expPct})\n   📋 Základ daně: ${czk(av.base)}\n   🏦 Daň: ${czk(av.tax)} | Soc: ${czk(av.social)} | Zdrav: ${czk(av.health)}\n   💳 Odvody: *${czk(av.total)}* (${av.rate} %)\n\n`,
+    taxFlat:        (pd, better) => `3️⃣ *Paušální daň* ${better}\n   📅 ${czk(pd.monthly)}/měs → *${czk(pd.annual)}*/rok\n   ✨ Bez daňového přiznání!\n\n`,
     taxProfit:      (income, expenses, levies, profit) =>
       `━━━━━━━━━━━━━━━━\n` +
       `💰 Příjmy: ${czk(income)}\n` +
@@ -758,14 +776,25 @@ const T = {
       `━━━━━━━━━━━━━━━━\n` +
       `💵 *Čistý zisk: ${czk(profit)}*\n\n`,
     taxBetter:      '✅ Lepší!',
-    taxWinner:      (method, savings) => `━━━━━━━━━━━━━━━━\n🏆 *Lepší: ${method}*\n💡 Rozdíl: *${czk(savings)}* / rok\n\n`,
+    taxWinner:      (method, savings) => `━━━━━━━━━━━━━━━━\n🏆 *Lepší: ${method}*\n💡 Rozdíl: *${czk(savings)}* / rok\n💰 To je ${czk(Math.round(savings / 12))} / měsíc navíc!\n\n`,
     taxFlat1:       'Paušální daň',
     taxPausal1:     'Paušální výdaje 60 %',
     taxActual1:     'Skutečné výdaje',
-    taxWarning:     '⚠️ Odhad. Poraď se s účetní/m.',
-    vedlejsiInfo:   (base, limit, paysSocial) => paysSocial
-      ? `📋 Základ daně: *${czk(base)}* > rozhodná částka ${czk(limit)}\n→ Sociální pojištění se *platí*\n\n`
-      : `📋 Základ daně: *${czk(base)}* < rozhodná částka ${czk(limit)}\n→ Sociální pojištění: *0 Kč* ✅\n\n`,
+    taxWarning:     '━━━━━━━━━━━━━━━━\n' +
+                    '⚠️ *Důležité upozornění*\n' +
+                    '• Výpočet je *orientační* a slouží pouze k informativním účelům.\n' +
+                    '• Použita sazba paušálních výdajů *60 %* (živnosti). Pro zemědělství/řemesla platí 80 %, pro regulované profese 40 %, pro pronájem 30 %.\n' +
+                    '• Nenahrazuje individuální daňové poradenství.\n' +
+                    '• Pro přesný výpočet se obraťte na *daňového poradce nebo účetní*.\n' +
+                    '• Autor nenese odpovědnost za případné škody vzniklé použitím tohoto nástroje.\n',
+    vedlejsiInfo:   (base, limit, paysSocial) => {
+      const pct = Math.min(100, Math.round(base / limit * 100));
+      const filled = Math.round(pct / 10);
+      const bar = '█'.repeat(filled) + '░'.repeat(10 - filled);
+      return paysSocial
+        ? `📋 Základ daně: *${czk(base)}* > limit ${czk(limit)}\n${bar} ${pct} %\n→ ⚠️ Sociální pojištění se *platí*\n\n`
+        : `📋 Základ daně: *${czk(base)}* < limit ${czk(limit)}\n${bar} ${pct} %\n→ ✅ Sociální pojištění: *0 Kč*\n\n`;
+    },
     switchYear:     (y) => `📅 → ${y}`,
 
     addAnother:     (type) => type === 'income' ? '💰 Další příjem' : type === 'expense' ? '🧾 Další výdaj' : '🚗 Další km',
@@ -796,20 +825,31 @@ const T = {
       `\`25000 faktura 15.11.2025\`\n` +
       `\`vydaj 800 benzin nov 2025\`\n` +
       `\`150km Brno 3/2025\`\n\n` +
-      `*Nebo použij tlačítka* — povedou tě krok za krokem s kalendářem pro výběr data.\n\n` +
-      `*Příkazy:*\n/start — hlavní menu\n/prehled — přehled\n/dane — daně\n/reset — smazat všechna data`,
+      `*Nebo použij tlačítka* — povedou tě krok za krokem s kalendářem.\n\n` +
+      `*Příkazy:*\n` +
+      `/start — hlavní menu\n` +
+      `/prehled — přehled\n` +
+      `/dane — daně\n` +
+      `/info — právní upozornění\n` +
+      `/reset — smazat všechna data\n\n` +
+      `━━━━━━━━━━━━━━━━\n` +
+      `📌 *Důležité:*\n` +
+      `• Výpočty používají *paušální výdaje 60 %* (živnosti).\n` +
+      `• Jiné sazby: 80 % zemědělství/řemesla, 40 % regulované profese (lékaři, právníci, konzultanti, autoři), 30 % pronájem.\n` +
+      `• Pokud máte jinou sazbu, poraďte se s daňovým poradcem.\n` +
+      `• Bot slouží jako *orientační pomůcka*, nenahrazuje odborné poradenství.`,
   },
 
   en: {
     welcome: (name) =>
       `👋 Hi ${name}! I'm your *Czech tax assistant* 🇨🇿\n\n` +
-      `Type naturally or use the buttons below.\n\n` +
-      `*Examples:*\n` +
+      `Track income, expenses & mileage — I'll calculate your taxes.\n\n` +
+      `⚡ *Quick start:*\n` +
       `💰 \`25000 invoice Novák\`\n` +
       `🧾 \`expense 4900 laptop\`\n` +
       `🚗 \`150km Brno\`\n\n` +
-      `📅 *With date:* \`25000 invoice 15.11.2025\`\n` +
-      `Or pick a date from the calendar via buttons.`,
+      `📅 *With date:* \`25000 invoice 15.11.2025\`\n\n` +
+      `💡 _Tip: The more entries you add, the more accurate your tax estimate!_`,
     menu: {
       income:   '💰 Add income',
       expense:  '🧾 Add expense',
@@ -841,9 +881,9 @@ const T = {
     wizSaved:       '✅ Saved!',
     wizCancelled:   '❌ Cancelled.',
 
-    incomeSaved:    (amount, desc, dl) => `💰 Income: *${czk(amount)}*${desc ? `\n📝 ${desc}` : ''}${dl ? `\n📅 ${dl}` : ''}`,
-    expenseSaved:   (amount, desc, dl) => `🧾 Expense: *${czk(amount)}*${desc ? ` — ${desc}` : ''}${dl ? `\n📅 ${dl}` : ''}`,
-    kmSaved:        (km, purpose, dl) => `✅ *${km} km* logged${purpose ? ` — ${purpose}` : ''}${dl ? `\n📅 ${dl}` : ''}`,
+    incomeSaved:    (amount, desc, dl) => `✅ 💰 Income saved: *${czk(amount)}*${desc ? `\n📝 ${desc}` : ''}${dl ? `\n📅 ${dl}` : ''}`,
+    expenseSaved:   (amount, desc, dl) => `✅ 🧾 Expense saved: *${czk(amount)}*${desc ? ` — ${desc}` : ''}${dl ? `\n📅 ${dl}` : ''}`,
+    kmSaved:        (km, purpose, dl) => `✅ 🚗 *${km} km* logged${purpose ? ` — ${purpose}` : ''}${dl ? `\n📅 ${dl}` : ''}`,
     incomeDefault:  'income',
     expenseDefault: 'expense',
     kmDefault:      'business trip',
@@ -872,12 +912,12 @@ const T = {
     backToMenu:     '↩️ Menu',
 
     pickYear:       '📅 Pick a year:',
-    summaryTitle:   (year) => `📊 *Summary ${year}*\n━━━━━━━━━━━━━━━━\n`,
-    summaryIncome:  (total, count) => `💰 Income: *${czk(total)}* (${count} invoices)\n`,
+    summaryTitle:   (year) => `📊 *Summary ${year}*\n━━━━━━━━━━━━━━━━━━━\n`,
+    summaryIncome:  (total, count) => `💰 Income: *${czk(total)}* (${count} ${count === 1 ? 'invoice' : 'invoices'})\n`,
     summaryExpenses:(total) => `🧾 Expenses: *${czk(total)}*\n`,
     summaryNet:     (net) => net >= 0
-      ? `📈 Profit: *${czk(net)}*\n\n`
-      : `📉 Loss: *${czk(net)}*\n\n`,
+      ? `📈 Gross profit: *${czk(net)}*\n\n`
+      : `📉 Loss: *${czk(net)}* 😬\n\n`,
     summaryTaxHdr:  '🧮 *Estimated tax & insurance:*\n',
     summaryTax:     (tax) => `• Income tax: ${czk(tax.tax)}\n• Social: ${czk(tax.social)}\n• Health: ${czk(tax.health)}\n• *Total: ${czk(tax.total)}*`,
     compareMethods: '🧮 Compare methods',
@@ -886,9 +926,9 @@ const T = {
     taxTitle:       (year) => `🧮 *Tax comparison — ${year}*\n`,
     taxAnnual:      (amount, m) => `📈 Annual projection (${m}-month basis): *${czk(amount)}*\n━━━━━━━━━━━━━━━━\n\n`,
     taxAnnualFull:  (amount) => `📈 Full-year income: *${czk(amount)}*\n━━━━━━━━━━━━━━━━\n\n`,
-    taxPausal:      (pv) => `1️⃣ *Flat-rate expenses 60 %*\n   Tax base: ${czk(pv.base)}\n   Tax & insurance: *${czk(pv.total)}*\n\n`,
-    taxActual:      (av, expenses) => `2️⃣ *Actual expenses*\n   Expenses: ${czk(expenses)} (${av.expPct})\n   Tax base: ${czk(av.base)}\n   Tax & insurance: *${czk(av.total)}*\n\n`,
-    taxFlat:        (pd, better) => `3️⃣ *Flat-rate tax* ${better}\n   ${czk(pd.monthly)}/mo → *${czk(pd.annual)}*/yr | No tax return!\n\n`,
+    taxPausal:      (pv) => `1️⃣ *Flat-rate expenses 60 %*\n   📋 Tax base: ${czk(pv.base)}\n   🏦 Tax: ${czk(pv.tax)} | Social: ${czk(pv.social)} | Health: ${czk(pv.health)}\n   💳 Total: *${czk(pv.total)}* (${pv.rate} %)\n\n`,
+    taxActual:      (av, expenses) => `2️⃣ *Actual expenses*\n   🧾 Expenses: ${czk(expenses)} (${av.expPct})\n   📋 Tax base: ${czk(av.base)}\n   🏦 Tax: ${czk(av.tax)} | Social: ${czk(av.social)} | Health: ${czk(av.health)}\n   💳 Total: *${czk(av.total)}* (${av.rate} %)\n\n`,
+    taxFlat:        (pd, better) => `3️⃣ *Flat-rate tax* ${better}\n   📅 ${czk(pd.monthly)}/mo → *${czk(pd.annual)}*/yr\n   ✨ No tax return needed!\n\n`,
     taxProfit:      (income, expenses, levies, profit) =>
       `━━━━━━━━━━━━━━━━\n` +
       `💰 Income: ${czk(income)}\n` +
@@ -897,14 +937,25 @@ const T = {
       `━━━━━━━━━━━━━━━━\n` +
       `💵 *Take-home profit: ${czk(profit)}*\n\n`,
     taxBetter:      '✅ Better!',
-    taxWinner:      (method, savings) => `━━━━━━━━━━━━━━━━\n🏆 *Better for you: ${method}*\n💡 Difference: *${czk(savings)}* / year\n\n`,
+    taxWinner:      (method, savings) => `━━━━━━━━━━━━━━━━\n🏆 *Better for you: ${method}*\n💡 Difference: *${czk(savings)}* / year\n💰 That's ${czk(Math.round(savings / 12))} / month extra!\n\n`,
     taxFlat1:       'Flat-rate tax',
     taxPausal1:     'Flat-rate expenses 60 %',
     taxActual1:     'Actual expenses',
-    taxWarning:     '⚠️ Estimate only. Consult an accountant.',
-    vedlejsiInfo:   (base, limit, paysSocial) => paysSocial
-      ? `📋 Tax base: *${czk(base)}* > threshold ${czk(limit)}\n→ Social insurance *applies*\n\n`
-      : `📋 Tax base: *${czk(base)}* < threshold ${czk(limit)}\n→ Social insurance: *0 Kč* ✅\n\n`,
+    taxWarning:     '━━━━━━━━━━━━━━━━\n' +
+                    '⚠️ *Important notice*\n' +
+                    '• This is an *estimate* for informational purposes only.\n' +
+                    '• Uses *60 % flat-rate expenses* (trade licenses/živnosti). Agriculture/crafts use 80 %, regulated professions 40 %, rental 30 %.\n' +
+                    '• This does not replace individual tax advice.\n' +
+                    '• For accurate calculations, consult a *tax advisor or accountant*.\n' +
+                    '• The author assumes no liability for any damages arising from use of this tool.\n',
+    vedlejsiInfo:   (base, limit, paysSocial) => {
+      const pct = Math.min(100, Math.round(base / limit * 100));
+      const filled = Math.round(pct / 10);
+      const bar = '█'.repeat(filled) + '░'.repeat(10 - filled);
+      return paysSocial
+        ? `📋 Tax base: *${czk(base)}* > threshold ${czk(limit)}\n${bar} ${pct} %\n→ ⚠️ Social insurance *applies*\n\n`
+        : `📋 Tax base: *${czk(base)}* < threshold ${czk(limit)}\n${bar} ${pct} %\n→ ✅ Social insurance: *0 Kč*\n\n`;
+    },
     switchYear:     (y) => `📅 → ${y}`,
 
     addAnother:     (type) => type === 'income' ? '💰 Another income' : type === 'expense' ? '🧾 Another expense' : '🚗 Another trip',
@@ -935,8 +986,19 @@ const T = {
       `\`25000 invoice 15.11.2025\`\n` +
       `\`expense 800 gas nov 2025\`\n` +
       `\`150km Brno 3/2025\`\n\n` +
-      `*Or use the buttons* — they guide you step by step with a calendar for date selection.\n\n` +
-      `*Commands:*\n/start — main menu\n/prehled — summary\n/dane — taxes\n/reset — delete all data`,
+      `*Or use the buttons* — step by step with calendar.\n\n` +
+      `*Commands:*\n` +
+      `/start — main menu\n` +
+      `/prehled — summary\n` +
+      `/dane — taxes\n` +
+      `/info — legal disclaimer\n` +
+      `/reset — delete all data\n\n` +
+      `━━━━━━━━━━━━━━━━\n` +
+      `📌 *Important:*\n` +
+      `• Calculations use *60 % flat-rate expenses* (trade licenses/živnosti).\n` +
+      `• Other rates: 80 % agriculture/crafts, 40 % regulated professions (doctors, lawyers, consultants, authors), 30 % rental.\n` +
+      `• If your rate is different, consult a tax advisor.\n` +
+      `• This bot is an *informational tool*, not professional tax advice.`,
   },
 };
 
@@ -947,6 +1009,42 @@ function fmtDate(d) {
   if (!d) return '—';
   const dt = d instanceof Date ? d : new Date(d);
   return `${dt.getDate()}.${dt.getMonth() + 1}.${dt.getFullYear()}`;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ██  GAMIFICATION  ██
+// ═══════════════════════════════════════════════════════════════
+const MILESTONES_CS = [
+  { count: 1,   emoji: '🎉', msg: 'První záznam! Dobrý start!' },
+  { count: 5,   emoji: '⭐', msg: '5 záznamů! Jsi na dobré cestě.' },
+  { count: 10,  emoji: '🔥', msg: '10 záznamů! Skvělá práce!' },
+  { count: 25,  emoji: '💎', msg: '25 záznamů! Máš přehled jako profík!' },
+  { count: 50,  emoji: '🏆', msg: '50 záznamů! Účetní by záviděla!' },
+  { count: 100, emoji: '👑', msg: '100 záznamů! Jsi daňový/á šampion/ka!' },
+];
+
+const MILESTONES_EN = [
+  { count: 1,   emoji: '🎉', msg: 'First entry! Great start!' },
+  { count: 5,   emoji: '⭐', msg: '5 entries! You\'re on track.' },
+  { count: 10,  emoji: '🔥', msg: '10 entries! Awesome work!' },
+  { count: 25,  emoji: '💎', msg: '25 entries! Pro-level tracking!' },
+  { count: 50,  emoji: '🏆', msg: '50 entries! Your accountant would be proud!' },
+  { count: 100, emoji: '👑', msg: '100 entries! Tax tracking champion!' },
+];
+
+async function getMilestone(tgId, lang) {
+  const { rows } = await query(
+    `SELECT (
+      (SELECT COUNT(*) FROM income i JOIN users u ON u.id=i.user_id WHERE u.telegram_id=$1) +
+      (SELECT COUNT(*) FROM expenses e JOIN users u ON u.id=e.user_id WHERE u.telegram_id=$1) +
+      (SELECT COUNT(*) FROM mileage_log m JOIN users u ON u.id=m.user_id WHERE u.telegram_id=$1)
+    ) AS total`,
+    [tgId]
+  );
+  const total = parseInt(rows[0].total);
+  const milestones = lang === 'cs' ? MILESTONES_CS : MILESTONES_EN;
+  const hit = milestones.find(m => m.count === total);
+  return hit ? `\n\n${hit.emoji} *${hit.msg}* (${total})` : '';
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1122,6 +1220,43 @@ bot.command('start', async ctx => {
 bot.command('prehled', ctx => askYear(ctx, 'sum'));
 bot.command('dane',    ctx => askYear(ctx, 'tax'));
 bot.command('help',    showHelp);
+bot.command('info',    async ctx => {
+  const lang = getLang(ctx);
+  const disclaimer = lang === 'cs'
+    ? `⚖️ *Právní upozornění*\n` +
+      `━━━━━━━━━━━━━━━━━━━\n\n` +
+      `📋 *Účel:* Tento bot je *informativní nástroj* pro orientační výpočet daní a odvodů OSVČ v České republice.\n\n` +
+      `🏦 *Sazba paušálních výdajů:*\n` +
+      `Bot používá sazbu *60 %* (volné a vázané živnosti).\n` +
+      `Jiné sazby dle § 7 odst. 7 ZDP:\n` +
+      `• 🌾 *80 %* — zemědělství, lesnictví, řemeslné živnosti\n` +
+      `• 📐 *40 %* — regulované profese (lékaři, právníci, daňoví poradci, architekti, autoři, konzultanti)\n` +
+      `• 🏠 *30 %* — příjmy z pronájmu (§ 9)\n\n` +
+      `⚠️ *Omezení odpovědnosti:*\n` +
+      `• Výpočty jsou *orientační* a mohou se lišit od skutečné daňové povinnosti.\n` +
+      `• Bot nezohledňuje všechny slevy na dani, nezdanitelné části základu daně, ani specifické situace (kombinace hlavní/vedlejší činnosti v jednom roce, přerušení živnosti apod.).\n` +
+      `• Autor *nenese žádnou odpovědnost* za škody vzniklé použitím tohoto nástroje.\n` +
+      `• Pro závazný výpočet se obraťte na *kvalifikovaného daňového poradce nebo účetní*.\n\n` +
+      `📅 *Legislativa:* Údaje odpovídají zákonům platným k dubnu 2026.\n` +
+      `🔄 Změny legislativy (např. novely sociálního pojištění) mohou ovlivnit přesnost výpočtů.`
+    : `⚖️ *Legal Disclaimer*\n` +
+      `━━━━━━━━━━━━━━━━━━━\n\n` +
+      `📋 *Purpose:* This bot is an *informational tool* for estimating Czech OSVČ taxes and insurance contributions.\n\n` +
+      `🏦 *Flat-rate expense rate:*\n` +
+      `This bot uses *60 %* (trade licenses/živnosti).\n` +
+      `Other rates per § 7(7) of the Income Tax Act:\n` +
+      `• 🌾 *80 %* — agriculture, forestry, craft trades\n` +
+      `• 📐 *40 %* — regulated professions (doctors, lawyers, tax advisors, architects, authors, consultants)\n` +
+      `• 🏠 *30 %* — rental income (§ 9)\n\n` +
+      `⚠️ *Limitation of liability:*\n` +
+      `• Calculations are *estimates* and may differ from actual tax obligations.\n` +
+      `• The bot does not account for all tax credits, deductions, or specific scenarios (e.g. mixed primary/secondary activity in one year, suspended trade license, etc.).\n` +
+      `• The author assumes *no liability* for any damages arising from the use of this tool.\n` +
+      `• For binding calculations, consult a *qualified tax advisor or accountant*.\n\n` +
+      `📅 *Legislation:* Data reflects laws in effect as of April 2026.\n` +
+      `🔄 Legislative changes (e.g. social insurance amendments) may affect accuracy.`;
+  await ctx.reply(disclaimer, { parse_mode: 'Markdown', reply_markup: mainMenu(lang, getActivity(ctx)) });
+});
 bot.command('reset',   async ctx => {
   const lang = getLang(ctx);
   const t = T[lang];
@@ -1388,7 +1523,8 @@ bot.callbackQuery('wiz_save', async ctx => {
 
     try { await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard() }); } catch (e) {}
 
-    await ctx.reply(T[lang].wizSaved, { reply_markup: afterSaveKeyboard(lang, savedType) });
+    const milestone = await getMilestone(ctx.from.id, lang);
+    await ctx.reply(T[lang].wizSaved + milestone, { parse_mode: 'Markdown', reply_markup: afterSaveKeyboard(lang, savedType) });
   } catch (err) {
     console.error('Save error:', err);
     await ctx.reply('❌ Error saving. Please try again.');
