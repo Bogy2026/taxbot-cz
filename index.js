@@ -660,12 +660,12 @@ const T = {
       `📅 *S datem:* \`25000 faktura 15.11.2025\`\n\n` +
       `💡 _Tip: Čím víc záznamů přidáš, tím přesnější bude tvůj daňový odhad!_`,
     menu: {
-      income:   '💰 Přidat příjem',
-      expense:  '🧾 Přidat výdaj',
+      income:   '💰 Příjem',
+      expense:  '🧾 Výdaj',
       summary:  '📊 Přehled',
       tax:      '🧮 Daně',
       entries:  '📝 Záznamy',
-      feedback: '💬 Zpětná vazba',
+      feedback: '💬 Napsat nám',
       help:     '❓ Nápověda',
       lang:     '🇬🇧 English',
     },
@@ -804,10 +804,14 @@ const T = {
       `📌 *Důležité:*\n` +
       `• Výpočty používají *paušální výdaje 60 %* (živnosti).\n` +
       `• Jiné sazby: 80 % zemědělství/řemesla, 40 % regulované profese (lékaři, právníci, konzultanti, autoři), 30 % pronájem.\n` +
-      `• Pokud máte jinou sazbu, poraďte se s daňovým poradcem.\n` +
+      `• Pokud máš jinou sazbu, poraď se s daňovým poradcem.\n` +
       `• Bot slouží jako *orientační pomůcka*, nenahrazuje odborné poradenství.`,
-    feedbackPrompt: '💬 *Zpětná vazba*\n\nNapiš svůj nápad, připomínku nebo dotaz — pošlu to vývojáři.',
-    feedbackSent:   '✅ Díky za zpětnou vazbu! Vývojář ji obdrží.',
+    feedbackPrompt: '💬 *Napsat nám*\n\nVyber typ zprávy:',
+    feedbackQuestion: '❓ Dotaz / problém',
+    feedbackSuggestion: '💡 Návrh / nápad',
+    feedbackAsk:    '❓ *Dotaz nebo problém*\n\nPopiš svůj dotaz nebo problém — předáme ho vývojáři.',
+    feedbackIdea:   '💡 *Návrh nebo nápad*\n\nCo by se dalo vylepšit? Napiš svůj nápad.',
+    feedbackSent:   '✅ Odesláno! Díky za zprávu, vývojář ji obdrží.',
     feedbackEmpty:  '❌ Napiš zprávu se zpětnou vazbou.',
   },
 
@@ -821,12 +825,12 @@ const T = {
       `📅 *With date:* \`25000 invoice 15.11.2025\`\n\n` +
       `💡 _Tip: The more entries you add, the more accurate your tax estimate!_`,
     menu: {
-      income:   '💰 Add income',
-      expense:  '🧾 Add expense',
+      income:   '💰 Income',
+      expense:  '🧾 Expense',
       summary:  '📊 Summary',
       tax:      '🧮 Taxes',
       entries:  '📝 Manage',
-      feedback: '💬 Feedback',
+      feedback: '💬 Contact us',
       help:     '❓ Help',
       lang:     '🇨🇿 Čeština',
     },
@@ -962,8 +966,12 @@ const T = {
       `• Other rates: 80 % agriculture/crafts, 40 % regulated professions (doctors, lawyers, consultants, authors), 30 % rental.\n` +
       `• If your rate is different, consult a tax advisor.\n` +
       `• This bot is an *informational tool*, not professional tax advice.`,
-    feedbackPrompt: '💬 *Feedback*\n\nType your idea, suggestion, or question — I\'ll forward it to the developer.',
-    feedbackSent:   '✅ Thanks for your feedback! The developer will receive it.',
+    feedbackPrompt: '💬 *Contact us*\n\nChoose message type:',
+    feedbackQuestion: '❓ Question / issue',
+    feedbackSuggestion: '💡 Suggestion / idea',
+    feedbackAsk:    '❓ *Question or issue*\n\nDescribe your question or problem — we\'ll forward it to the developer.',
+    feedbackIdea:   '💡 *Suggestion or idea*\n\nWhat could be improved? Share your idea.',
+    feedbackSent:   '✅ Sent! Thanks for your message, the developer will receive it.',
     feedbackEmpty:  '❌ Please type a message with your feedback.',
   },
 };
@@ -1271,9 +1279,31 @@ bot.callbackQuery('help', ctx => { ctx.answerCallbackQuery(); showHelp(ctx); });
 bot.callbackQuery('feedback', async ctx => {
   await ctx.answerCallbackQuery();
   const lang = getLang(ctx);
-  ctx.session.awaitingFeedback = true;
+  const t = T[lang];
   ctx.session.wizard = null;
-  await ctx.reply(T[lang].feedbackPrompt, { parse_mode: 'Markdown' });
+  const kb = new InlineKeyboard()
+    .text(t.feedbackQuestion, 'feedback_question').row()
+    .text(t.feedbackSuggestion, 'feedback_suggestion').row()
+    .text(t.backToMenu, 'back_menu');
+  await ctx.reply(t.feedbackPrompt, { parse_mode: 'Markdown', reply_markup: kb });
+});
+
+bot.callbackQuery('feedback_question', async ctx => {
+  await ctx.answerCallbackQuery();
+  const lang = getLang(ctx);
+  ctx.session.awaitingFeedback = 'question';
+  ctx.session.wizard = null;
+  try { await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard() }); } catch (e) {}
+  await ctx.reply(T[lang].feedbackAsk, { parse_mode: 'Markdown' });
+});
+
+bot.callbackQuery('feedback_suggestion', async ctx => {
+  await ctx.answerCallbackQuery();
+  const lang = getLang(ctx);
+  ctx.session.awaitingFeedback = 'suggestion';
+  ctx.session.wizard = null;
+  try { await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard() }); } catch (e) {}
+  await ctx.reply(T[lang].feedbackIdea, { parse_mode: 'Markdown' });
 });
 
 // ── Year pickers ──
@@ -1603,15 +1633,23 @@ bot.on('message:text', async ctx => {
 
   // ── Feedback mode: forward message to admin ──
   if (ctx.session.awaitingFeedback) {
+    const feedbackType = ctx.session.awaitingFeedback; // 'question' or 'suggestion'
     ctx.session.awaitingFeedback = false;
+    const typeLabel = feedbackType === 'question' ? '❓ Question/Issue' : '💡 Suggestion/Idea';
     if (ADMIN_ID) {
       try {
         const from = ctx.from;
-        const header = `💬 *Feedback from* @${sanitizeDesc(from.username || '')} (${sanitizeDesc(from.first_name || '')}, ID: ${from.id}):\n\n`;
-        await bot.api.sendMessage(ADMIN_ID, header + sanitizeDesc(text), { parse_mode: 'Markdown' });
+        const header = `${typeLabel}\n` +
+          `👤 ${sanitizeDesc(from.first_name || '')} (@${sanitizeDesc(from.username || 'no-username')})\n` +
+          `🆔 ${from.id}\n` +
+          `━━━━━━━━━━━━━━━━\n`;
+        await bot.api.sendMessage(Number(ADMIN_ID), header + text);
+        console.log(`📬 Feedback forwarded to admin ${ADMIN_ID} from user ${from.id}`);
       } catch (err) {
         console.error('Feedback forward error:', err);
       }
+    } else {
+      console.warn('⚠️ ADMIN_TELEGRAM_ID not set — feedback not forwarded');
     }
     return ctx.reply(t.feedbackSent, { reply_markup: mainMenu(lang, getActivity(ctx)) });
   }
@@ -1699,7 +1737,7 @@ async function showEntries(ctx, offset = 0) {
   const t = T[lang];
 
   try {
-    const entries = await getRecentEntries(ctx.from.id, 5, offset);
+    const entries = await getRecentEntries(ctx.from.id, 10, offset);
 
     if (entries.length === 0 && offset === 0) {
       return ctx.reply(t.entriesEmpty, { reply_markup: mainMenu(lang, getActivity(ctx)) });
@@ -1707,31 +1745,51 @@ async function showEntries(ctx, offset = 0) {
 
     let text = t.entriesTitle + '\n';
     const kb = new InlineKeyboard();
+    let currentMonth = '';
 
-    for (const e of entries) {
-      // Sanitize descriptions from DB (old entries may contain Markdown-breaking chars)
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i];
       if (e.description) e.description = sanitizeDesc(e.description);
 
-      if (e.type === 'income') {
-        text += t.entryIncome(e) + '\n';
-        kb.text(t.deleteBtn + ' ' + czk(parseFloat(e.amount)), `del_income_${e.id}`).row();
-      } else if (e.type === 'expense') {
-        text += t.entryExpense(e) + '\n';
-        kb.text(t.deleteBtn + ' ' + czk(parseFloat(e.amount)), `del_expense_${e.id}`).row();
+      // Group by month header
+      const dt = e.date ? new Date(e.date) : new Date();
+      const monthKey = `${dt.getMonth() + 1}/${dt.getFullYear()}`;
+      const monthLabel = `${MONTH_NAMES[lang][dt.getMonth() + 1]} ${dt.getFullYear()}`;
+      if (monthKey !== currentMonth) {
+        currentMonth = monthKey;
+        text += `\n📅 *${monthLabel}*\n`;
       }
+
+      const num = offset + i + 1;
+      const day = dt.getDate();
+      const icon = e.type === 'income' ? '💰' : '🧾';
+      const amount = czk(parseFloat(e.amount));
+      const desc = e.description ? ` ${e.description}` : '';
+      text += `${num}. ${icon} ${amount} —${desc} (${day}.)\n`;
     }
+
+    // Compact delete buttons — fit 5 per row
+    let btnCount = 0;
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i];
+      const num = offset + i + 1;
+      const delAction = e.type === 'income' ? `del_income_${e.id}` : `del_expense_${e.id}`;
+      kb.text(`🗑️ ${num}`, delAction);
+      btnCount++;
+      if (btnCount % 5 === 0) kb.row();
+    }
+    if (btnCount % 5 !== 0) kb.row();
 
     // Pagination
     if (offset > 0) {
-      kb.text('◀', `entries_page_${Math.max(0, offset - 5)}`);
+      kb.text('◀', `entries_page_${Math.max(0, offset - 10)}`);
     }
-    if (entries.length === 5) {
-      kb.text(t.moreEntries + ' ▶', `entries_page_${offset + 5}`);
+    if (entries.length === 10) {
+      kb.text((lang === 'cs' ? 'Další' : 'More') + ' ▶', `entries_page_${offset + 10}`);
     }
     kb.row();
     kb.text(t.backToMenu, 'back_menu');
 
-    // Try Markdown first, fall back to plain text if it fails
     try {
       await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: kb });
     } catch (mdErr) {
