@@ -811,8 +811,12 @@ const T = {
     actSwitchToVedlejsi: '⚙️ → Vedlejší činnost',
     actSwitchToHlavni:   '⚙️ → Hlavní činnost',
     actChanged:    (act) => act === 'vedlejsi'
-      ? '✅ Nastaveno: *vedlejší činnost*\nSociální pojištění se platí jen při zisku nad rozhodnou částku. Zdravotní z reálných příjmů.'
-      : '✅ Nastaveno: *hlavní činnost*\nMinimální odvody se platí i při nulovém příjmu.',
+      ? '✅ Nastaveno: *vedlejší činnost*\n\n' +
+        '🔹 Vedlejší = máš zaměstnání, jsi student/ka, na rodičovské nebo v důchodu\n\n' +
+        'Sociální pojištění se platí jen při zisku nad rozhodnou částku. Zdravotní z reálných příjmů.'
+      : '✅ Nastaveno: *hlavní činnost*\n\n' +
+        '🔹 Hlavní = podnikání je tvůj jediný/hlavní zdroj příjmů\n\n' +
+        'Minimální odvody se platí i při nulovém příjmu.',
     actNote:       (act) => act === 'vedlejsi' ? '_(vedlejší činnost)_' : '_(hlavní činnost)_',
     helpText:
       `❓ *Jak mě používat*\n\n` +
@@ -971,8 +975,12 @@ const T = {
     actSwitchToVedlejsi: '⚙️ → Secondary activity',
     actSwitchToHlavni:   '⚙️ → Primary activity',
     actChanged:    (act) => act === 'vedlejsi'
-      ? '✅ Set to: *secondary activity*\nSocial insurance only above income threshold. Health from actual income.'
-      : '✅ Set to: *primary activity*\nMinimum levies apply even with zero income.',
+      ? '✅ Set to: *secondary activity*\n\n' +
+        '🔹 Secondary = you also have a job, are a student, on parental leave, or retired\n\n' +
+        'Social insurance only above income threshold. Health from actual income.'
+      : '✅ Set to: *primary activity*\n\n' +
+        '🔹 Primary = self-employment is your only/main income source\n\n' +
+        'Minimum levies apply even with zero income.',
     actNote:       (act) => act === 'vedlejsi' ? '_(secondary activity)_' : '_(primary activity)_',
     helpText:
       `❓ *How to use me*\n\n` +
