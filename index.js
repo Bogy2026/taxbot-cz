@@ -665,7 +665,7 @@ const T = {
       summary:  '📊 Přehled',
       tax:      '🧮 Daně',
       entries:  '📝 Záznamy',
-      feedback: '💬 Napsat nám',
+      feedback: '💬 Napsat',
       help:     '❓ Nápověda',
       lang:     '🇬🇧 English',
     },
@@ -706,8 +706,9 @@ const T = {
                     '`vydaj 800 benzin`',
 
     // ── Entries ──
-    entriesTitle:   '📝 *Záznamy:*\n',
+    entriesTitle:   '📝 *Záznamy:*',
     entriesEmpty:   '📭 Žádné záznamy.\nPřidej první přes menu!',
+    entriesFooter:  '\n_✏️ Chceš upravit? Smaž záznam (🗑️) a přidej znovu._',
     entryIncome:    (e) => `💰 ${czk(e.amount)} — ${e.description} (${fmtDate(e.date)})`,
     entryExpense:   (e) => `🧾 ${czk(e.amount)} — ${e.description} (${fmtDate(e.date)})`,
     deleteConfirm:  '🗑️ Smazáno.',
@@ -830,7 +831,7 @@ const T = {
       summary:  '📊 Summary',
       tax:      '🧮 Taxes',
       entries:  '📝 Manage',
-      feedback: '💬 Contact us',
+      feedback: '💬 Contact',
       help:     '❓ Help',
       lang:     '🇨🇿 Čeština',
     },
@@ -868,8 +869,9 @@ const T = {
                     "`25000 invoice client`\n" +
                     "`expense 800 gas`",
 
-    entriesTitle:   '📝 *Entries:*\n',
+    entriesTitle:   '📝 *Entries:*',
     entriesEmpty:   '📭 No entries yet.\nAdd your first via the menu!',
+    entriesFooter:  '\n_✏️ To edit, delete (🗑️) and re-add._',
     entryIncome:    (e) => `💰 ${czk(e.amount)} — ${e.description} (${fmtDate(e.date)})`,
     entryExpense:   (e) => `🧾 ${czk(e.amount)} — ${e.description} (${fmtDate(e.date)})`,
     deleteConfirm:  '🗑️ Deleted.',
@@ -1767,6 +1769,8 @@ async function showEntries(ctx, offset = 0) {
       const desc = e.description ? ` ${e.description}` : '';
       text += `${num}. ${icon} ${amount} —${desc} (${day}.)\n`;
     }
+
+    text += t.entriesFooter;
 
     // Compact delete buttons — fit 5 per row
     let btnCount = 0;
