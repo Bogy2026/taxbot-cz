@@ -1329,7 +1329,10 @@ bot.callbackQuery('toggle_lang', async ctx => {
   await ctx.answerCallbackQuery();
   const next = getLang(ctx) === 'cs' ? 'en' : 'cs';
   ctx.session.lang = next;
-  await ctx.reply(T[next].langChanged, { reply_markup: mainMenu(next, getActivity(ctx)) });
+  await ctx.reply(
+    T[next].langChanged + '\n\n' + T[next].welcome(sanitizeDesc(ctx.from.first_name || 'User')),
+    { parse_mode: 'Markdown', reply_markup: mainMenu(next, getActivity(ctx)) }
+  );
 });
 
 // ── Activity toggle (hlavní ↔ vedlejší) ──
