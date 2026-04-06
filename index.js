@@ -756,8 +756,6 @@ const T = {
     summaryNet:     (net) => net >= 0
       ? `📈 Hrubý zisk: *${czk(net)}*\n\n`
       : `📉 Ztráta: *${czk(net)}* 😬\n\n`,
-    summaryTaxHdr:  '🧮 *Odhadované odvody:*\n',
-    summaryTax:     (tax) => `• Daň: ${czk(tax.tax)}\n• Sociální: ${czk(tax.social)}\n• Zdravotní: ${czk(tax.health)}\n• *Celkem odvody: ${czk(tax.total)}*`,
     compareMethods: '🧮 Porovnat metody',
 
     // ── Tax ──
@@ -918,8 +916,6 @@ const T = {
     summaryNet:     (net) => net >= 0
       ? `📈 Gross profit: *${czk(net)}*\n\n`
       : `📉 Loss: *${czk(net)}* 😬\n\n`,
-    summaryTaxHdr:  '🧮 *Estimated tax & insurance:*\n',
-    summaryTax:     (tax) => `• Income tax: ${czk(tax.tax)}\n• Social: ${czk(tax.social)}\n• Health: ${czk(tax.health)}\n• *Total: ${czk(tax.total)}*`,
     compareMethods: '🧮 Compare methods',
 
     noIncome:       (year) => `📭 No income in ${year}.\nAdd via menu or type: \`25000 invoice\``,
@@ -1800,40 +1796,26 @@ async function showSummary(ctx) {
     const expRow = s.monthlyExp.find(r => parseInt(r.month) === m);
     const inc = incRow ? parseFloat(incRow.total) : 0;
     const exp = expRow ? parseFloat(expRow.total) : 0;
-    const net = inc - exp;
 
-    const mLabel = String(t.months[m]).padEnd(4);
+    const mLabel = t.months[m];
 
     if (inc === 0 && exp === 0) {
-      chart += `${mLabel} ░░░░░░░░\n`;
+      chart += `${mLabel}  ⬜⬜⬜⬜⬜⬜⬜\n`;
     } else {
       const incBars = inc > 0 ? Math.max(1, Math.round((inc / maxVal) * 7)) : 0;
       const expBars = exp > 0 ? Math.max(1, Math.round((exp / maxVal) * 7)) : 0;
       if (inc > 0) {
-        chart += `${mLabel} +${'▓'.repeat(incBars)}${'░'.repeat(7 - incBars)} ${czk(inc)}\n`;
+        chart += `${mLabel}  ${'🟩'.repeat(incBars)}${'⬜'.repeat(7 - incBars)} ${czk(inc)}\n`;
       }
       if (exp > 0) {
-        // If no income line, use month label; otherwise indent
-        const prefix = inc > 0 ? '     ' : mLabel + ' ';
-        chart += `${prefix}-${'▒'.repeat(expBars)}${'░'.repeat(7 - expBars)} ${czk(exp)}\n`;
+        const prefix = inc > 0 ? '        ' : mLabel + '  ';
+        chart += `${prefix}${'🟥'.repeat(expBars)}${'⬜'.repeat(7 - expBars)} ${czk(exp)}\n`;
       }
     }
   }
 
   const activity = getActivity(ctx);
   const actNote = t.actNote(activity);
-
-  // Calculate both methods, pick the best for summary display
-  const pvTax = calcPausal(s.income, year, activity);
-  let bestTax = pvTax;
-  let bestMethodName = t.taxPausal1;
-  if (s.expenses > 0) {
-    const avTax = calcActual(s.income, s.expenses, year, activity);
-    if (avTax.net > pvTax.net) {
-      bestTax = avTax;
-      bestMethodName = t.taxActual1;
-    }
-  }
 
   const kb = new InlineKeyboard()
     .text(t.compareMethods, 'calc_tax');
@@ -1851,11 +1833,9 @@ async function showSummary(ctx) {
     t.summaryIncome(s.income, s.count) +
     t.summaryExpenses(s.expenses) +
     t.summaryNet(netProfit) +
-    `\`\`\`\n${chart}\`\`\`\n` +
-    (lang === 'cs' ? '▓ příjmy  ▒ výdaje\n\n' : '▓ income  ▒ expenses\n\n') +
-    t.summaryTaxHdr +
-    (lang === 'cs' ? `_Metoda: ${bestMethodName}_\n` : `_Method: ${bestMethodName}_\n`) +
-    t.summaryTax(bestTax),
+    chart + '\n' +
+    (lang === 'cs' ? '🟩 příjmy  🟥 výdaje\n\n' : '🟩 income  🟥 expenses\n\n') +
+    (lang === 'cs' ? '💡 _Klikni na „Porovnat metody" pro odhad daní a odvodů._' : '💡 _Tap "Compare methods" to see your tax estimate._'),
     { parse_mode: 'Markdown', reply_markup: kb }
   );
 }
