@@ -756,7 +756,7 @@ const T = {
     summaryNet:     (net) => net >= 0
       ? `📈 Hrubý zisk: *${czk(net)}*\n\n`
       : `📉 Ztráta: *${czk(net)}* 😬\n\n`,
-    compareMethods: '🧮 Porovnat metody',
+    compareMethods: '🧮 Porovnat',
 
     // ── Tax ──
     noIncome:       (year) => `📭 Žádné příjmy v ${year}.\nPřidej přes menu nebo napiš: \`25000 faktura\``,
@@ -788,12 +788,13 @@ const T = {
     vedlejsiInfo:   (base, limit, paysSocial) => {
       const pct = Math.min(100, Math.round(base / limit * 100));
       const filled = Math.round(pct / 10);
-      const bar = '█'.repeat(filled) + '░'.repeat(10 - filled);
+      const barColor = paysSocial ? '🟥' : '🟩';
+      const bar = barColor.repeat(filled) + '⬜'.repeat(10 - filled);
       return paysSocial
         ? `📋 Základ daně: *${czk(base)}* > limit ${czk(limit)}\n${bar} ${pct} %\n→ ⚠️ Sociální pojištění se *platí*\n\n`
         : `📋 Základ daně: *${czk(base)}* < limit ${czk(limit)}\n${bar} ${pct} %\n→ ✅ Sociální pojištění: *0 Kč*\n\n`;
     },
-    switchYear:     (y) => `📅 → ${y}`,
+    switchYear:     (y) => `${y}`,
 
     addAnother:     (type) => type === 'income' ? '💰 Další příjem' : type === 'expense' ? '🧾 Další výdaj' : '🚗 Další km',
 
@@ -807,8 +808,8 @@ const T = {
     resetNo:       '↩️ Ne, ponechat',
     actHlavni:     'Hlavní činnost',
     actVedlejsi:   'Vedlejší činnost',
-    actSwitchToVedlejsi: '⚙️ Činnost: Hlavní → Přepnout na vedlejší',
-    actSwitchToHlavni:   '⚙️ Činnost: Vedlejší → Přepnout na hlavní',
+    actSwitchToVedlejsi: '⚙️ → Vedlejší činnost',
+    actSwitchToHlavni:   '⚙️ → Hlavní činnost',
     actChanged:    (act) => act === 'vedlejsi'
       ? '✅ Nastaveno: *vedlejší činnost*\nSociální pojištění se platí jen při zisku nad rozhodnou částku. Zdravotní z reálných příjmů.'
       : '✅ Nastaveno: *hlavní činnost*\nMinimální odvody se platí i při nulovém příjmu.',
@@ -916,7 +917,7 @@ const T = {
     summaryNet:     (net) => net >= 0
       ? `📈 Gross profit: *${czk(net)}*\n\n`
       : `📉 Loss: *${czk(net)}* 😬\n\n`,
-    compareMethods: '🧮 Compare methods',
+    compareMethods: '🧮 Compare',
 
     noIncome:       (year) => `📭 No income in ${year}.\nAdd via menu or type: \`25000 invoice\``,
     taxTitle:       (year) => `🧮 *Tax comparison — ${year}*\n`,
@@ -947,12 +948,13 @@ const T = {
     vedlejsiInfo:   (base, limit, paysSocial) => {
       const pct = Math.min(100, Math.round(base / limit * 100));
       const filled = Math.round(pct / 10);
-      const bar = '█'.repeat(filled) + '░'.repeat(10 - filled);
+      const barColor = paysSocial ? '🟥' : '🟩';
+      const bar = barColor.repeat(filled) + '⬜'.repeat(10 - filled);
       return paysSocial
         ? `📋 Tax base: *${czk(base)}* > threshold ${czk(limit)}\n${bar} ${pct} %\n→ ⚠️ Social insurance *applies*\n\n`
         : `📋 Tax base: *${czk(base)}* < threshold ${czk(limit)}\n${bar} ${pct} %\n→ ✅ Social insurance: *0 Kč*\n\n`;
     },
-    switchYear:     (y) => `📅 → ${y}`,
+    switchYear:     (y) => `${y}`,
 
     addAnother:     (type) => type === 'income' ? '💰 Another income' : type === 'expense' ? '🧾 Another expense' : '🚗 Another trip',
 
@@ -966,8 +968,8 @@ const T = {
     resetNo:       '↩️ No, keep it',
     actHlavni:     'Primary activity',
     actVedlejsi:   'Secondary activity',
-    actSwitchToVedlejsi: '⚙️ Activity: Primary → Switch to secondary',
-    actSwitchToHlavni:   '⚙️ Activity: Secondary → Switch to primary',
+    actSwitchToVedlejsi: '⚙️ → Secondary',
+    actSwitchToHlavni:   '⚙️ → Primary',
     actChanged:    (act) => act === 'vedlejsi'
       ? '✅ Set to: *secondary activity*\nSocial insurance only above income threshold. Health from actual income.'
       : '✅ Set to: *primary activity*\nMinimum levies apply even with zero income.',
