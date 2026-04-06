@@ -689,7 +689,7 @@ const T = {
       expense:  '🧾 Přidat výdaj',
       km:       '🚗 Kilometry',
       summary:  '📊 Přehled',
-      tax:      '🧮 Spočítat daně',
+      tax:      '🧮 Daně',
       entries:  '📋 Poslední záznamy',
       help:     '❓ Nápověda',
       lang:     '🇬🇧 English',
@@ -854,7 +854,7 @@ const T = {
       expense:  '🧾 Add expense',
       km:       '🚗 Mileage',
       summary:  '📊 Summary',
-      tax:      '🧮 Calculate taxes',
+      tax:      '🧮 Taxes',
       entries:  '📋 Recent entries',
       help:     '❓ Help',
       lang:     '🇨🇿 Čeština',
@@ -968,8 +968,8 @@ const T = {
     resetNo:       '↩️ No, keep it',
     actHlavni:     'Primary activity',
     actVedlejsi:   'Secondary activity',
-    actSwitchToVedlejsi: '⚙️ → Secondary',
-    actSwitchToHlavni:   '⚙️ → Primary',
+    actSwitchToVedlejsi: '⚙️ → Secondary activity',
+    actSwitchToHlavni:   '⚙️ → Primary activity',
     actChanged:    (act) => act === 'vedlejsi'
       ? '✅ Set to: *secondary activity*\nSocial insurance only above income threshold. Health from actual income.'
       : '✅ Set to: *primary activity*\nMinimum levies apply even with zero income.',
@@ -1180,9 +1180,9 @@ const mainMenu = (lang, activity = 'hlavni') => {
 
 const yearPicker = (action) =>
   new InlineKeyboard()
-    .text('📅 2024', `${action}_2024`)
-    .text('📅 2025', `${action}_2025`)
-    .text('📅 2026', `${action}_2026`);
+    .text('2024', `${action}_2024`)
+    .text('2025', `${action}_2025`)
+    .text('2026', `${action}_2026`);
 
 const confirmKeyboard = (lang) =>
   new InlineKeyboard()
