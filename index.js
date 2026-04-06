@@ -1223,6 +1223,11 @@ bot.command('info',    async ctx => {
       `• Bot nezohledňuje všechny slevy na dani, nezdanitelné části základu daně, ani specifické situace (kombinace hlavní/vedlejší činnosti v jednom roce, přerušení živnosti apod.).\n` +
       `• Autor *nenese žádnou odpovědnost* za škody vzniklé použitím tohoto nástroje.\n` +
       `• Pro závazný výpočet se obraťte na *kvalifikovaného daňového poradce nebo účetní*.\n\n` +
+      `🔒 *Ochrana dat:*\n` +
+      `• Ukládáme pouze příjmy, výdaje a Telegram ID — *nic víc*.\n` +
+      `• Tvá data *nikdy nesdílíme* s třetími stranami.\n` +
+      `• Neukládáme žádné citlivé údaje (rodné číslo, bankovní účet, hesla).\n` +
+      `• Svá data můžeš kdykoli smazat příkazem /reset.\n\n` +
       `📅 *Legislativa:* Údaje odpovídají zákonům platným k dubnu 2026.\n` +
       `🔄 Změny legislativy (např. novely sociálního pojištění) mohou ovlivnit přesnost výpočtů.`
     : `⚖️ *Legal Disclaimer*\n` +
@@ -1239,6 +1244,11 @@ bot.command('info',    async ctx => {
       `• The bot does not account for all tax credits, deductions, or specific scenarios (e.g. mixed primary/secondary activity in one year, suspended trade license, etc.).\n` +
       `• The author assumes *no liability* for any damages arising from the use of this tool.\n` +
       `• For binding calculations, consult a *qualified tax advisor or accountant*.\n\n` +
+      `🔒 *Data privacy:*\n` +
+      `• We only store your income, expenses, and Telegram ID — *nothing else*.\n` +
+      `• Your data is *never shared* with third parties.\n` +
+      `• We do not store sensitive information (national ID, bank details, passwords).\n` +
+      `• You can delete all your data anytime with /reset.\n\n` +
       `📅 *Legislation:* Data reflects laws in effect as of April 2026.\n` +
       `🔄 Legislative changes (e.g. social insurance amendments) may affect accuracy.`;
   await ctx.reply(disclaimer, { parse_mode: 'Markdown', reply_markup: mainMenu(lang, getActivity(ctx)) });
