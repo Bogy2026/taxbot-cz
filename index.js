@@ -235,6 +235,28 @@ function czk(n) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// ██  INPUT VALIDATION  ██
+// ═══════════════════════════════════════════════════════════════
+const MAX_AMOUNT = 99_999_999;  // 99.9M CZK — sanity cap
+const MAX_DESC_LENGTH = 200;    // Telegram has 4096 char message limit anyway
+
+function sanitizeDesc(desc) {
+  if (!desc) return '';
+  // Truncate, strip Markdown special chars that could break formatting
+  return desc
+    .slice(0, MAX_DESC_LENGTH)
+    .replace(/[*_`\[\]]/g, '')  // strip Markdown formatting chars
+    .trim();
+}
+
+function validateAmount(amount) {
+  if (typeof amount !== 'number' || isNaN(amount)) return null;
+  if (amount <= 0) return null;
+  if (amount > MAX_AMOUNT) return null;
+  return Math.round(amount * 100) / 100; // max 2 decimal places
+}
+
+// ═══════════════════════════════════════════════════════════════
 // ██  DATE PARSER (improved)  ██
 // ═══════════════════════════════════════════════════════════════
 const MONTH_MAP = {
@@ -426,26 +448,6 @@ function extractAmountAndDesc(text) {
   return null;
 }
 
-/**
- * extractKmAndDesc(text)
- * Flexibly finds km value from text like:
- * "150 Brno", "150km Brno", "Brno 150", "schůzka 150 km"
- */
-function extractKmAndDesc(text) {
-  // Try: number + optional "km" anywhere
-  const kmMatch = text.match(/([\d][\d\s,.]*?)\s*(?:km)?\b/i);
-  if (kmMatch) {
-    const km = parseAmount(kmMatch[1]);
-    if (!isNaN(km) && km > 0 && km < 100000) { // sanity check on km
-      const desc = (text.slice(0, kmMatch.index) + ' ' + text.slice(kmMatch.index + kmMatch[0].length))
-        .replace(/\s*(km)\s*/gi, ' ')
-        .replace(/\s+/g, ' ').trim();
-      return { km, desc };
-    }
-  }
-  return null;
-}
-
 function detectIntent(text) {
   const dateParsed = parseDate(text);
   const clean = dateParsed ? dateParsed.clean : text;
@@ -455,12 +457,9 @@ function detectIntent(text) {
 
   // ═══ STEP 1: Detect type by keyword ANYWHERE in text ═══
 
-  const KM_WORDS = /\bkm\b/i;
-  const KM_GLUED = /\d\s*km\b/i;  // "150km" or "150 km" — digit followed by km
   const EXP_WORDS = /\b(vydaj[e]?|zaplatil[a]?|nakoupil[a]?|expense|exp|spent|paid|cost|bought|buy|utraceno|utratil[a]?|naklad)\b/i;
   const INC_WORDS = /\b(income|prijem|prijmy|faktura|invoice)\b/i;
 
-  const hasKm  = KM_WORDS.test(lower) || KM_GLUED.test(lower);
   const hasExp = EXP_WORDS.test(lower);
   const hasInc = INC_WORDS.test(lower);
 
@@ -470,34 +469,11 @@ function detectIntent(text) {
     return txt
       .replace(/\b(vydaj[e]?|zaplatil[a]?|nakoupil[a]?|expense|exp|spent|paid|cost|bought|buy|utraceno|utratil[a]?|naklad)\b/gi, '')
       .replace(/\b(income|prijem|prijmy|faktura|invoice)\b/gi, '')
-      .replace(/(\d)\s*km\b/gi, '$1')  // "150km" → "150", "150 km" → "150"
-      .replace(/\bkm\s+/gi, '')        // standalone "km 150" → "150"
       .replace(/\s+/g, ' ')
       .trim();
   }
 
-  // ═══ STEP 3: KM mode — "km" found anywhere ═══
-
-  if (hasKm) {
-    // Strip "km" and keywords, then find number + desc
-    const stripped = stripKeywords(clean);
-    const extracted = extractAmountAndDesc(stripped);
-    if (extracted && extracted.amount > 0 && extracted.amount < 100000) {
-      return { type: 'km', km: extracted.amount, purpose: extracted.desc, date, dateLabel };
-    }
-    // Also try: bare "150km" glued together
-    const gluedMatch = clean.match(/([\d][\d\s,.]*?)\s*km/i);
-    if (gluedMatch) {
-      const km = parseAmount(gluedMatch[1]);
-      if (!isNaN(km) && km > 0) {
-        const rest = clean.replace(gluedMatch[0], '').replace(/\s+/g, ' ').trim();
-        return { type: 'km', km, purpose: rest, date, dateLabel };
-      }
-    }
-    return { type: 'km_error' };
-  }
-
-  // ═══ STEP 4: Expense mode — expense keyword found anywhere ═══
+  // ═══ STEP 3: Expense mode — expense keyword found anywhere ═══
 
   if (hasExp && !hasInc) {
     const stripped = stripKeywords(clean);
@@ -677,17 +653,15 @@ const T = {
   cs: {
     welcome: (name) =>
       `👋 Ahoj ${name}! Jsem tvůj *daňový pomocník* 🇨🇿\n\n` +
-      `Sleduj příjmy, výdaje a kilometry — a já ti spočítám daně.\n\n` +
+      `Sleduj příjmy a výdaje — a já ti spočítám daně.\n\n` +
       `⚡ *Rychlý start:*\n` +
       `💰 \`25000 faktura Novák\`\n` +
-      `🧾 \`vydaj 4900 notebook\`\n` +
-      `🚗 \`150km Brno\`\n\n` +
+      `🧾 \`vydaj 4900 notebook\`\n\n` +
       `📅 *S datem:* \`25000 faktura 15.11.2025\`\n\n` +
       `💡 _Tip: Čím víc záznamů přidáš, tím přesnější bude tvůj daňový odhad!_`,
     menu: {
       income:   '💰 Přidat příjem',
       expense:  '🧾 Přidat výdaj',
-      km:       '🚗 Kilometry',
       summary:  '📊 Přehled',
       tax:      '🧮 Daně',
       entries:  '📋 Poslední záznamy',
@@ -698,17 +672,14 @@ const T = {
     // ── Wizard prompts ──
     wizAmount:      (type) => type === 'income'
       ? '💰 *Kolik?*\nZadej částku (a volitelně popis):\n\n`25000`\n`25000 faktura Novák`'
-      : type === 'expense'
-      ? '🧾 *Kolik?*\nZadej částku (a volitelně popis):\n\n`4900`\n`4900 notebook`'
-      : '🚗 *Kolik km a kam?*\n\n`150 Brno`\n`150km schůzka Praha`',
+      : '🧾 *Kolik?*\nZadej částku (a volitelně popis):\n\n`4900`\n`4900 notebook`',
     wizPickDate:    '📅 *Vyber měsíc a den:*',
     wizConfirm:     (type, amount, desc, dateStr) => {
-      const icon = type === 'income' ? '💰' : type === 'expense' ? '🧾' : '🚗';
-      const label = type === 'income' ? 'Příjem' : type === 'expense' ? 'Výdaj' : 'Kilometry';
-      const amountStr = type === 'km' ? `${amount} km` : czk(amount);
+      const icon = type === 'income' ? '💰' : '🧾';
+      const label = type === 'income' ? 'Příjem' : 'Výdaj';
       return `${icon} *Potvrď záznam:*\n\n` +
         `• Typ: *${label}*\n` +
-        `• Částka: *${amountStr}*\n` +
+        `• Částka: *${czk(amount)}*\n` +
         (desc ? `• Popis: ${desc}\n` : '') +
         `• Datum: *${dateStr}*\n\n` +
         `Je to správně?`;
@@ -719,12 +690,9 @@ const T = {
     // ── Inline saves (quick text input) ──
     incomeSaved:    (amount, desc, dl) => `✅ 💰 Příjem uložen: *${czk(amount)}*${desc ? `\n📝 ${desc}` : ''}${dl ? `\n📅 ${dl}` : ''}`,
     expenseSaved:   (amount, desc, dl) => `✅ 🧾 Výdaj uložen: *${czk(amount)}*${desc ? ` — ${desc}` : ''}${dl ? `\n📅 ${dl}` : ''}`,
-    kmSaved:        (km, purpose, dl) => `✅ 🚗 *${km} km* zapsáno${purpose ? ` — ${purpose}` : ''}${dl ? `\n📅 ${dl}` : ''}`,
     incomeDefault:  'příjem',
     expenseDefault: 'výdaj',
-    kmDefault:      'pracovní cesta',
     expenseError:   '❌ Zkus: `vydaj 3500 telefon` nebo použij tlačítko 🧾',
-    kmError:        '❌ Nerozpoznal jsem km. Zkus:\n`150km Brno` nebo `150 km schůzka Praha`',
 
     wasExpense:     '↩️ Měl to být výdaj',
     wasIncome:      '↩️ Měl to být příjem',
@@ -734,15 +702,13 @@ const T = {
     unknown:        '🤔 Nerozumím.\n\n' +
                     'Použij tlačítka v menu, nebo napiš:\n' +
                     '`25000 faktura klient`\n' +
-                    '`vydaj 800 benzin`\n' +
-                    '`150km Brno`',
+                    '`vydaj 800 benzin`',
 
     // ── Entries ──
     entriesTitle:   '📋 *Poslední záznamy:*\n',
     entriesEmpty:   '📭 Žádné záznamy.\nPřidej první přes menu!',
     entryIncome:    (e) => `💰 ${czk(e.amount)} — ${e.description} (${fmtDate(e.date)})`,
     entryExpense:   (e) => `🧾 ${czk(e.amount)} — ${e.description} (${fmtDate(e.date)})`,
-    entryKm:        (e) => `🚗 ${e.km} km — ${e.purpose} (${fmtDate(e.date)})`,
     deleteConfirm:  '🗑️ Smazáno.',
     deleteBtn:      '🗑️',
     moreEntries:    '📋 Další',
@@ -796,11 +762,11 @@ const T = {
     },
     switchYear:     (y) => `${y}`,
 
-    addAnother:     (type) => type === 'income' ? '💰 Další příjem' : type === 'expense' ? '🧾 Další výdaj' : '🚗 Další km',
+    addAnother:     (type) => type === 'income' ? '💰 Další příjem' : '🧾 Další výdaj',
 
     months: ['','Led','Úno','Bře','Dub','Kvě','Čvn','Čvc','Srp','Zář','Říj','Lis','Pro'],
     langChanged: '🇨🇿 Jazyk: čeština',
-    resetConfirm:  '⚠️ *Opravdu smazat VŠECHNA data?*\nPříjmy, výdaje, kilometry — vše bude nenávratně odstraněno.',
+    resetConfirm:  '⚠️ *Opravdu smazat VŠECHNA data?*\nPříjmy, výdaje — vše bude nenávratně odstraněno.',
     resetDone:     (n) => `🗑️ Hotovo — smazáno *${n}* záznamů.\nMůžeš začít znovu.`,
     resetEmpty:    '📭 Žádná data k smazání.',
     resetCancelled:'✅ Zrušeno, data zůstávají.',
@@ -822,12 +788,10 @@ const T = {
       `❓ *Jak mě používat*\n\n` +
       `*Rychlý vstup (napiš zprávu):*\n` +
       `💰 \`25000 faktura Novák\` → příjem\n` +
-      `🧾 \`vydaj 4900 notebook\` → výdaj\n` +
-      `🚗 \`150km Brno\` → kilometry\n\n` +
+      `🧾 \`vydaj 4900 notebook\` → výdaj\n\n` +
       `*S datem:*\n` +
       `\`25000 faktura 15.11.2025\`\n` +
-      `\`vydaj 800 benzin nov 2025\`\n` +
-      `\`150km Brno 3/2025\`\n\n` +
+      `\`vydaj 800 benzin nov 2025\`\n\n` +
       `*Nebo použij tlačítka* — povedou tě krok za krokem s kalendářem.\n\n` +
       `*Příkazy:*\n` +
       `/start — hlavní menu\n` +
@@ -846,17 +810,15 @@ const T = {
   en: {
     welcome: (name) =>
       `👋 Hi ${name}! I'm your *Czech tax assistant* 🇨🇿\n\n` +
-      `Track income, expenses & mileage — I'll calculate your taxes.\n\n` +
+      `Track income & expenses — I'll calculate your taxes.\n\n` +
       `⚡ *Quick start:*\n` +
       `💰 \`25000 invoice Novák\`\n` +
-      `🧾 \`expense 4900 laptop\`\n` +
-      `🚗 \`150km Brno\`\n\n` +
+      `🧾 \`expense 4900 laptop\`\n\n` +
       `📅 *With date:* \`25000 invoice 15.11.2025\`\n\n` +
       `💡 _Tip: The more entries you add, the more accurate your tax estimate!_`,
     menu: {
       income:   '💰 Add income',
       expense:  '🧾 Add expense',
-      km:       '🚗 Mileage',
       summary:  '📊 Summary',
       tax:      '🧮 Taxes',
       entries:  '📋 Recent entries',
@@ -866,17 +828,14 @@ const T = {
 
     wizAmount:      (type) => type === 'income'
       ? '💰 *How much?*\nEnter amount (and optional description):\n\n`25000`\n`25000 invoice Novák`'
-      : type === 'expense'
-      ? '🧾 *How much?*\nEnter amount (and optional description):\n\n`4900`\n`4900 laptop`'
-      : '🚗 *How many km and where?*\n\n`150 Brno`\n`150km meeting Prague`',
+      : '🧾 *How much?*\nEnter amount (and optional description):\n\n`4900`\n`4900 laptop`',
     wizPickDate:    '📅 *Pick a month and day:*',
     wizConfirm:     (type, amount, desc, dateStr) => {
-      const icon = type === 'income' ? '💰' : type === 'expense' ? '🧾' : '🚗';
-      const label = type === 'income' ? 'Income' : type === 'expense' ? 'Expense' : 'Mileage';
-      const amountStr = type === 'km' ? `${amount} km` : czk(amount);
+      const icon = type === 'income' ? '💰' : '🧾';
+      const label = type === 'income' ? 'Income' : 'Expense';
       return `${icon} *Confirm entry:*\n\n` +
         `• Type: *${label}*\n` +
-        `• Amount: *${amountStr}*\n` +
+        `• Amount: *${czk(amount)}*\n` +
         (desc ? `• Description: ${desc}\n` : '') +
         `• Date: *${dateStr}*\n\n` +
         `Is this correct?`;
@@ -886,12 +845,9 @@ const T = {
 
     incomeSaved:    (amount, desc, dl) => `✅ 💰 Income saved: *${czk(amount)}*${desc ? `\n📝 ${desc}` : ''}${dl ? `\n📅 ${dl}` : ''}`,
     expenseSaved:   (amount, desc, dl) => `✅ 🧾 Expense saved: *${czk(amount)}*${desc ? ` — ${desc}` : ''}${dl ? `\n📅 ${dl}` : ''}`,
-    kmSaved:        (km, purpose, dl) => `✅ 🚗 *${km} km* logged${purpose ? ` — ${purpose}` : ''}${dl ? `\n📅 ${dl}` : ''}`,
     incomeDefault:  'income',
     expenseDefault: 'expense',
-    kmDefault:      'business trip',
     expenseError:   '❌ Try: `expense 3500 phone` or use the 🧾 button',
-    kmError:        '❌ Couldn\'t parse km. Try:\n`150km Brno` or `150 km meeting Prague`',
 
     wasExpense:     '↩️ Should be expense',
     wasIncome:      '↩️ Should be income',
@@ -901,14 +857,12 @@ const T = {
     unknown:        "🤔 I didn't get that.\n\n" +
                     "Use the menu buttons, or type:\n" +
                     "`25000 invoice client`\n" +
-                    "`expense 800 gas`\n" +
-                    "`150km Brno`",
+                    "`expense 800 gas`",
 
     entriesTitle:   '📋 *Recent entries:*\n',
     entriesEmpty:   '📭 No entries yet.\nAdd your first via the menu!',
     entryIncome:    (e) => `💰 ${czk(e.amount)} — ${e.description} (${fmtDate(e.date)})`,
     entryExpense:   (e) => `🧾 ${czk(e.amount)} — ${e.description} (${fmtDate(e.date)})`,
-    entryKm:        (e) => `🚗 ${e.km} km — ${e.purpose} (${fmtDate(e.date)})`,
     deleteConfirm:  '🗑️ Deleted.',
     deleteBtn:      '🗑️',
     moreEntries:    '📋 More',
@@ -960,11 +914,11 @@ const T = {
     },
     switchYear:     (y) => `${y}`,
 
-    addAnother:     (type) => type === 'income' ? '💰 Another income' : type === 'expense' ? '🧾 Another expense' : '🚗 Another trip',
+    addAnother:     (type) => type === 'income' ? '💰 Another income' : '🧾 Another expense',
 
     months: ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'],
     langChanged: '🇬🇧 Language: English',
-    resetConfirm:  '⚠️ *Delete ALL your data?*\nIncome, expenses, mileage — everything will be permanently removed.',
+    resetConfirm:  '⚠️ *Delete ALL your data?*\nIncome, expenses — everything will be permanently removed.',
     resetDone:     (n) => `🗑️ Done — deleted *${n}* entries.\nYou can start fresh.`,
     resetEmpty:    '📭 No data to delete.',
     resetCancelled:'✅ Cancelled, your data is safe.',
@@ -986,12 +940,10 @@ const T = {
       `❓ *How to use me*\n\n` +
       `*Quick input (just type):*\n` +
       `💰 \`25000 invoice Novák\` → income\n` +
-      `🧾 \`expense 4900 laptop\` → expense\n` +
-      `🚗 \`150km Brno\` → mileage\n\n` +
+      `🧾 \`expense 4900 laptop\` → expense\n\n` +
       `*With date:*\n` +
       `\`25000 invoice 15.11.2025\`\n` +
-      `\`expense 800 gas nov 2025\`\n` +
-      `\`150km Brno 3/2025\`\n\n` +
+      `\`expense 800 gas nov 2025\`\n\n` +
       `*Or use the buttons* — step by step with calendar.\n\n` +
       `*Commands:*\n` +
       `/start — main menu\n` +
@@ -1042,8 +994,7 @@ async function getMilestone(tgId, lang) {
   const { rows } = await query(
     `SELECT (
       (SELECT COUNT(*) FROM income i JOIN users u ON u.id=i.user_id WHERE u.telegram_id=$1) +
-      (SELECT COUNT(*) FROM expenses e JOIN users u ON u.id=e.user_id WHERE u.telegram_id=$1) +
-      (SELECT COUNT(*) FROM mileage_log m JOIN users u ON u.id=m.user_id WHERE u.telegram_id=$1)
+      (SELECT COUNT(*) FROM expenses e JOIN users u ON u.id=e.user_id WHERE u.telegram_id=$1)
     ) AS total`,
     [tgId]
   );
@@ -1057,44 +1008,55 @@ async function getMilestone(tgId, lang) {
 // ██  DATABASE HELPERS  ██
 // ═══════════════════════════════════════════════════════════════
 async function upsertUser(tg) {
+  const safeName = sanitizeDesc(tg.first_name || 'User');
+  const safeUsername = tg.username ? sanitizeDesc(tg.username) : null;
   const { rows } = await query(
     `INSERT INTO users (telegram_id, first_name, username) VALUES ($1,$2,$3)
      ON CONFLICT (telegram_id) DO UPDATE SET first_name=EXCLUDED.first_name, username=EXCLUDED.username
      RETURNING *`,
-    [tg.id, tg.first_name, tg.username]
+    [tg.id, safeName, safeUsername]
   );
   return rows[0];
 }
 
 async function addIncome(tgId, amount, desc, date = null) {
+  const validAmount = validateAmount(amount);
+  if (!validAmount) throw new Error('Invalid amount');
+  const safeDesc = sanitizeDesc(desc);
   const u = await upsertUser({ id: tgId });
   const ts = date ? (date instanceof Date ? date.toISOString() : date) : new Date().toISOString();
   const { rows } = await query(
     `INSERT INTO income (user_id, amount, description, date) VALUES ($1,$2,$3,$4) RETURNING id`,
-    [u.id, amount, desc, ts]
+    [u.id, validAmount, safeDesc, ts]
   );
   return rows[0].id;
 }
 
 async function addExpense(tgId, amount, desc, date = null) {
+  const validAmount = validateAmount(amount);
+  if (!validAmount) throw new Error('Invalid amount');
+  const safeDesc = sanitizeDesc(desc);
   const u = await upsertUser({ id: tgId });
   const ts = date ? (date instanceof Date ? date.toISOString() : date) : new Date().toISOString();
   const { rows } = await query(
     `INSERT INTO expenses (user_id, amount, description, date) VALUES ($1,$2,$3,$4) RETURNING id`,
-    [u.id, amount, desc, ts]
+    [u.id, validAmount, safeDesc, ts]
   );
   return rows[0].id;
 }
 
-async function addMileage(tgId, km, purpose, date = null) {
-  const u = await upsertUser({ id: tgId });
-  const ts = date ? (date instanceof Date ? date.toISOString() : date) : new Date().toISOString();
-  await query(`INSERT INTO mileage_log (user_id, km, purpose, date) VALUES ($1,$2,$3,$4)`, [u.id, km, purpose, ts]);
+async function deleteIncomeById(id, tgId)  {
+  await query(
+    `DELETE FROM income WHERE id=$1 AND user_id=(SELECT id FROM users WHERE telegram_id=$2)`,
+    [id, tgId]
+  );
 }
-
-async function deleteIncomeById(id)  { await query(`DELETE FROM income WHERE id=$1`, [id]); }
-async function deleteExpenseById(id) { await query(`DELETE FROM expenses WHERE id=$1`, [id]); }
-async function deleteMileageById(id) { await query(`DELETE FROM mileage_log WHERE id=$1`, [id]); }
+async function deleteExpenseById(id, tgId) {
+  await query(
+    `DELETE FROM expenses WHERE id=$1 AND user_id=(SELECT id FROM users WHERE telegram_id=$2)`,
+    [id, tgId]
+  );
+}
 
 async function deleteAllUserData(tgId) {
   const { rows } = await query(`SELECT id FROM users WHERE telegram_id=$1`, [tgId]);
@@ -1108,14 +1070,11 @@ async function deleteAllUserData(tgId) {
 
 async function getRecentEntries(tgId, limit = 10, offset = 0) {
   const { rows } = await query(
-    `(SELECT 'income' AS type, i.id, i.amount, i.description, NULL AS km, NULL AS purpose, i.date
+    `(SELECT 'income' AS type, i.id, i.amount, i.description, i.date
       FROM income i JOIN users u ON u.id=i.user_id WHERE u.telegram_id=$1)
      UNION ALL
-     (SELECT 'expense' AS type, e.id, e.amount, e.description, NULL AS km, NULL AS purpose, e.date
+     (SELECT 'expense' AS type, e.id, e.amount, e.description, e.date
       FROM expenses e JOIN users u ON u.id=e.user_id WHERE u.telegram_id=$1)
-     UNION ALL
-     (SELECT 'km' AS type, m.id, NULL AS amount, NULL AS description, m.km, m.purpose, m.date
-      FROM mileage_log m JOIN users u ON u.id=m.user_id WHERE u.telegram_id=$1)
      ORDER BY date DESC
      LIMIT $2 OFFSET $3`,
     [tgId, limit, offset]
@@ -1160,7 +1119,7 @@ bot.use(session({
     lastEntry: null,
     activity: 'hlavni', // 'hlavni' or 'vedlejsi'
     // Wizard state
-    wizard: null, // { step: 'amount'|'date'|'confirm', type: 'income'|'expense'|'km', amount, desc, date, calYear, calMonth }
+    wizard: null, // { step: 'amount'|'date'|'confirm', type: 'income'|'expense', amount, desc, date, calYear, calMonth }
   }),
 }));
 
@@ -1179,7 +1138,6 @@ const mainMenu = (lang, activity = 'hlavni') => {
     : T[lang].actSwitchToHlavni;    // currently vedlejší → button says "switch to hlavní"
   return new InlineKeyboard()
     .text(m.income,  'add_income').text(m.expense, 'add_expense').row()
-    .text(m.km,      'add_km').row()
     .text(m.summary, 'summary').text(m.tax, 'calc_tax').row()
     .text(m.entries, 'entries').row()
     .text(actLabel, 'toggle_activity').row()
@@ -1220,7 +1178,7 @@ bot.command('start', async ctx => {
   await upsertUser(ctx.from);
   ctx.session.wizard = null;
   const lang = getLang(ctx);
-  await ctx.reply(T[lang].welcome(ctx.from.first_name), { parse_mode: 'Markdown', reply_markup: mainMenu(lang, getActivity(ctx)) });
+  await ctx.reply(T[lang].welcome(sanitizeDesc(ctx.from.first_name || 'User')), { parse_mode: 'Markdown', reply_markup: mainMenu(lang, getActivity(ctx)) });
 });
 
 bot.command('prehled', ctx => askYear(ctx, 'sum'));
@@ -1358,13 +1316,6 @@ bot.callbackQuery('add_expense', async ctx => {
   const lang = getLang(ctx);
   ctx.session.wizard = { step: 'amount', type: 'expense' };
   await ctx.reply(T[lang].wizAmount('expense'), { parse_mode: 'Markdown' });
-});
-
-bot.callbackQuery('add_km', async ctx => {
-  await ctx.answerCallbackQuery();
-  const lang = getLang(ctx);
-  ctx.session.wizard = { step: 'amount', type: 'km' };
-  await ctx.reply(T[lang].wizAmount('km'), { parse_mode: 'Markdown' });
 });
 
 // ── Wizard: calendar navigation ──
@@ -1520,8 +1471,6 @@ bot.callbackQuery('wiz_save', async ctx => {
       await addIncome(ctx.from.id, wiz.amount, wiz.desc || T[lang].incomeDefault, wiz.date);
     } else if (wiz.type === 'expense') {
       await addExpense(ctx.from.id, wiz.amount, wiz.desc || T[lang].expenseDefault, wiz.date);
-    } else if (wiz.type === 'km') {
-      await addMileage(ctx.from.id, wiz.amount, wiz.desc || T[lang].kmDefault, wiz.date);
     }
 
     const savedType = wiz.type;
@@ -1573,7 +1522,7 @@ bot.callbackQuery('fix_to_expense', async ctx => {
   const lang = getLang(ctx); const t = T[lang];
   const last = ctx.session.lastEntry;
   if (!last || last.type !== 'income') return ctx.reply('❌');
-  await deleteIncomeById(last.id);
+  await deleteIncomeById(last.id, ctx.from.id);
   const newId = await addExpense(ctx.from.id, last.amount, last.desc, last.date);
   ctx.session.lastEntry = { ...last, type: 'expense', id: newId };
   try { await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard() }); } catch (e) {}
@@ -1585,7 +1534,7 @@ bot.callbackQuery('fix_to_income', async ctx => {
   const lang = getLang(ctx); const t = T[lang];
   const last = ctx.session.lastEntry;
   if (!last || last.type !== 'expense') return ctx.reply('❌');
-  await deleteExpenseById(last.id);
+  await deleteExpenseById(last.id, ctx.from.id);
   const newId = await addIncome(ctx.from.id, last.amount, last.desc, last.date);
   ctx.session.lastEntry = { ...last, type: 'income', id: newId };
   try { await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard() }); } catch (e) {}
@@ -1600,19 +1549,18 @@ bot.callbackQuery('entries', async ctx => {
 
 bot.callbackQuery(/^entries_page_/, async ctx => {
   await ctx.answerCallbackQuery();
-  const offset = parseInt(ctx.callbackQuery.data.replace('entries_page_', ''));
+  const offset = Math.max(0, parseInt(ctx.callbackQuery.data.replace('entries_page_', '')) || 0);
   await showEntries(ctx, offset);
 });
 
-bot.callbackQuery(/^del_(income|expense|km)_(\d+)$/, async ctx => {
+bot.callbackQuery(/^del_(income|expense)_(\d+)$/, async ctx => {
   await ctx.answerCallbackQuery();
-  const [, type, idStr] = ctx.callbackQuery.data.match(/^del_(income|expense|km)_(\d+)$/);
+  const [, type, idStr] = ctx.callbackQuery.data.match(/^del_(income|expense)_(\d+)$/);
   const id = parseInt(idStr);
 
   try {
-    if (type === 'income') await deleteIncomeById(id);
-    else if (type === 'expense') await deleteExpenseById(id);
-    else if (type === 'km') await deleteMileageById(id);
+    if (type === 'income') await deleteIncomeById(id, ctx.from.id);
+    else if (type === 'expense') await deleteExpenseById(id, ctx.from.id);
 
     const lang = getLang(ctx);
     try { await ctx.editMessageText(T[lang].deleteConfirm); } catch (e) {}
@@ -1634,26 +1582,6 @@ bot.on('message:text', async ctx => {
 
   // ── Wizard: awaiting amount ──
   if (wiz && wiz.step === 'amount') {
-    if (wiz.type === 'km') {
-      // Parse km amount + purpose (flexible: "150 Brno", "Brno 150km", "150km Brno")
-      const kmExtracted = extractKmAndDesc(text);
-      if (kmExtracted) {
-        wiz.amount = kmExtracted.km;
-        wiz.desc = kmExtracted.desc;
-        wiz.step = 'date';
-
-        const now = new Date();
-        wiz.calYear = now.getFullYear();
-        wiz.calMonth = now.getMonth() + 1;
-
-        return ctx.reply(t.wizPickDate, {
-          parse_mode: 'Markdown',
-          reply_markup: buildMonthPicker(wiz.calYear, lang),
-        });
-      }
-      return ctx.reply(t.wizAmount('km'), { parse_mode: 'Markdown' });
-    }
-
     // Parse amount + optional description (flexible: number can be anywhere)
     const extracted = extractAmountAndDesc(text);
     if (extracted) {
@@ -1682,23 +1610,6 @@ bot.on('message:text', async ctx => {
 
   // ── Natural text parsing (existing behavior, improved) ──
   const intent = detectIntent(text);
-
-  if (intent.type === 'km') {
-    const purpose = intent.purpose || t.kmDefault;
-    if (intent.date) {
-      // Date in text → save directly
-      await addMileage(ctx.from.id, intent.km, purpose, intent.date);
-      return ctx.reply(t.kmSaved(intent.km, purpose, intent.dateLabel), { parse_mode: 'Markdown' });
-    }
-    // No date → wizard for date
-    const now = new Date();
-    ctx.session.wizard = { step: 'date', type: 'km', amount: intent.km, desc: purpose, calYear: now.getFullYear(), calMonth: now.getMonth() + 1 };
-    return ctx.reply(t.wizPickDate, { parse_mode: 'Markdown', reply_markup: buildMonthPicker(now.getFullYear(), lang) });
-  }
-
-  if (intent.type === 'km_error') {
-    return ctx.reply(t.kmError, { parse_mode: 'Markdown' });
-  }
 
   if (intent.type === 'expense_error') {
     return ctx.reply(t.expenseError, { parse_mode: 'Markdown' });
@@ -1748,40 +1659,51 @@ bot.on('message:text', async ctx => {
 async function showEntries(ctx, offset = 0) {
   const lang = getLang(ctx);
   const t = T[lang];
-  const entries = await getRecentEntries(ctx.from.id, 5, offset);
 
-  if (entries.length === 0 && offset === 0) {
-    return ctx.reply(t.entriesEmpty, { reply_markup: mainMenu(lang, getActivity(ctx)) });
-  }
+  try {
+    const entries = await getRecentEntries(ctx.from.id, 5, offset);
 
-  let text = t.entriesTitle + '\n';
-  const kb = new InlineKeyboard();
-
-  for (const e of entries) {
-    if (e.type === 'income') {
-      text += t.entryIncome(e) + '\n';
-      kb.text(t.deleteBtn + ' ' + czk(parseFloat(e.amount)), `del_income_${e.id}`).row();
-    } else if (e.type === 'expense') {
-      text += t.entryExpense(e) + '\n';
-      kb.text(t.deleteBtn + ' ' + czk(parseFloat(e.amount)), `del_expense_${e.id}`).row();
-    } else if (e.type === 'km') {
-      text += t.entryKm(e) + '\n';
-      kb.text(t.deleteBtn + ' ' + parseFloat(e.km) + ' km', `del_km_${e.id}`).row();
+    if (entries.length === 0 && offset === 0) {
+      return ctx.reply(t.entriesEmpty, { reply_markup: mainMenu(lang, getActivity(ctx)) });
     }
-  }
 
-  // Pagination
-  const navRow = [];
-  if (offset > 0) {
-    kb.text('◀', `entries_page_${Math.max(0, offset - 5)}`);
-  }
-  if (entries.length === 5) {
-    kb.text(t.moreEntries + ' ▶', `entries_page_${offset + 5}`);
-  }
-  kb.row();
-  kb.text(t.backToMenu, 'back_menu');
+    let text = t.entriesTitle + '\n';
+    const kb = new InlineKeyboard();
 
-  await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: kb });
+    for (const e of entries) {
+      // Sanitize descriptions from DB (old entries may contain Markdown-breaking chars)
+      if (e.description) e.description = sanitizeDesc(e.description);
+
+      if (e.type === 'income') {
+        text += t.entryIncome(e) + '\n';
+        kb.text(t.deleteBtn + ' ' + czk(parseFloat(e.amount)), `del_income_${e.id}`).row();
+      } else if (e.type === 'expense') {
+        text += t.entryExpense(e) + '\n';
+        kb.text(t.deleteBtn + ' ' + czk(parseFloat(e.amount)), `del_expense_${e.id}`).row();
+      }
+    }
+
+    // Pagination
+    if (offset > 0) {
+      kb.text('◀', `entries_page_${Math.max(0, offset - 5)}`);
+    }
+    if (entries.length === 5) {
+      kb.text(t.moreEntries + ' ▶', `entries_page_${offset + 5}`);
+    }
+    kb.row();
+    kb.text(t.backToMenu, 'back_menu');
+
+    // Try Markdown first, fall back to plain text if it fails
+    try {
+      await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: kb });
+    } catch (mdErr) {
+      await ctx.reply(text, { reply_markup: kb });
+    }
+  } catch (err) {
+    console.error('Entries error:', err);
+    await ctx.reply('❌ ' + (lang === 'cs' ? 'Chyba při načítání záznamů.' : 'Error loading entries.'),
+      { reply_markup: mainMenu(lang, getActivity(ctx)) });
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1790,6 +1712,8 @@ async function showEntries(ctx, offset = 0) {
 async function showSummary(ctx) {
   const lang = getLang(ctx);
   const t = T[lang];
+
+  try {
   const year = getYear(ctx);
   const s = await getSummary(ctx.from.id, year);
 
@@ -1848,11 +1772,18 @@ async function showSummary(ctx) {
     (lang === 'cs' ? '💡 _Klikni na „Porovnat metody" pro odhad daní a odvodů._' : '💡 _Tap "Compare methods" to see your tax estimate._'),
     { parse_mode: 'Markdown', reply_markup: kb }
   );
+  } catch (err) {
+    console.error('Summary error:', err);
+    await ctx.reply('❌ ' + (lang === 'cs' ? 'Chyba při načítání přehledu.' : 'Error loading summary.'),
+      { reply_markup: mainMenu(lang, getActivity(ctx)) });
+  }
 }
 
 async function showTax(ctx) {
   const lang = getLang(ctx);
   const t = T[lang];
+
+  try {
   const year = getYear(ctx);
   const currentYear = new Date().getFullYear();
   const month = new Date().getMonth() + 1;
@@ -1953,11 +1884,20 @@ async function showTax(ctx) {
   kb.row().text(t.backToMenu, 'back_menu');
 
   await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: kb });
+  } catch (err) {
+    console.error('Tax calc error:', err);
+    await ctx.reply('❌ ' + (lang === 'cs' ? 'Chyba při výpočtu daní.' : 'Error calculating taxes.'),
+      { reply_markup: mainMenu(lang, getActivity(ctx)) });
+  }
 }
 
 async function showHelp(ctx) {
   const lang = getLang(ctx);
-  await ctx.reply(T[lang].helpText, { parse_mode: 'Markdown', reply_markup: mainMenu(lang, getActivity(ctx)) });
+  try {
+    await ctx.reply(T[lang].helpText, { parse_mode: 'Markdown', reply_markup: mainMenu(lang, getActivity(ctx)) });
+  } catch (err) {
+    await ctx.reply(T[lang].helpText, { reply_markup: mainMenu(lang, getActivity(ctx)) });
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
