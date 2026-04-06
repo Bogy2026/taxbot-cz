@@ -664,7 +664,8 @@ const T = {
       expense:  '🧾 Přidat výdaj',
       summary:  '📊 Přehled',
       tax:      '🧮 Daně',
-      entries:  '📋 Poslední záznamy',
+      entries:  '📝 Záznamy',
+      feedback: '💬 Zpětná vazba',
       help:     '❓ Nápověda',
       lang:     '🇬🇧 English',
     },
@@ -705,7 +706,7 @@ const T = {
                     '`vydaj 800 benzin`',
 
     // ── Entries ──
-    entriesTitle:   '📋 *Poslední záznamy:*\n',
+    entriesTitle:   '📝 *Záznamy:*\n',
     entriesEmpty:   '📭 Žádné záznamy.\nPřidej první přes menu!',
     entryIncome:    (e) => `💰 ${czk(e.amount)} — ${e.description} (${fmtDate(e.date)})`,
     entryExpense:   (e) => `🧾 ${czk(e.amount)} — ${e.description} (${fmtDate(e.date)})`,
@@ -805,6 +806,9 @@ const T = {
       `• Jiné sazby: 80 % zemědělství/řemesla, 40 % regulované profese (lékaři, právníci, konzultanti, autoři), 30 % pronájem.\n` +
       `• Pokud máte jinou sazbu, poraďte se s daňovým poradcem.\n` +
       `• Bot slouží jako *orientační pomůcka*, nenahrazuje odborné poradenství.`,
+    feedbackPrompt: '💬 *Zpětná vazba*\n\nNapiš svůj nápad, připomínku nebo dotaz — pošlu to vývojáři.',
+    feedbackSent:   '✅ Díky za zpětnou vazbu! Vývojář ji obdrží.',
+    feedbackEmpty:  '❌ Napiš zprávu se zpětnou vazbou.',
   },
 
   en: {
@@ -821,7 +825,8 @@ const T = {
       expense:  '🧾 Add expense',
       summary:  '📊 Summary',
       tax:      '🧮 Taxes',
-      entries:  '📋 Recent entries',
+      entries:  '📝 Manage',
+      feedback: '💬 Feedback',
       help:     '❓ Help',
       lang:     '🇨🇿 Čeština',
     },
@@ -859,7 +864,7 @@ const T = {
                     "`25000 invoice client`\n" +
                     "`expense 800 gas`",
 
-    entriesTitle:   '📋 *Recent entries:*\n',
+    entriesTitle:   '📝 *Entries:*\n',
     entriesEmpty:   '📭 No entries yet.\nAdd your first via the menu!',
     entryIncome:    (e) => `💰 ${czk(e.amount)} — ${e.description} (${fmtDate(e.date)})`,
     entryExpense:   (e) => `🧾 ${czk(e.amount)} — ${e.description} (${fmtDate(e.date)})`,
@@ -957,6 +962,9 @@ const T = {
       `• Other rates: 80 % agriculture/crafts, 40 % regulated professions (doctors, lawyers, consultants, authors), 30 % rental.\n` +
       `• If your rate is different, consult a tax advisor.\n` +
       `• This bot is an *informational tool*, not professional tax advice.`,
+    feedbackPrompt: '💬 *Feedback*\n\nType your idea, suggestion, or question — I\'ll forward it to the developer.',
+    feedbackSent:   '✅ Thanks for your feedback! The developer will receive it.',
+    feedbackEmpty:  '❌ Please type a message with your feedback.',
   },
 };
 
@@ -1110,6 +1118,7 @@ async function getSummary(tgId, year) {
 // ██  BOT SETUP  ██
 // ═══════════════════════════════════════════════════════════════
 const bot = new Bot(process.env.BOT_TOKEN);
+const ADMIN_ID = process.env.ADMIN_TELEGRAM_ID; // Your Telegram user ID for receiving feedback
 const THIS_YEAR = new Date().getFullYear();
 
 bot.use(session({
@@ -1120,6 +1129,7 @@ bot.use(session({
     activity: 'hlavni', // 'hlavni' or 'vedlejsi'
     // Wizard state
     wizard: null, // { step: 'amount'|'date'|'confirm', type: 'income'|'expense', amount, desc, date, calYear, calMonth }
+    awaitingFeedback: false,
   }),
 }));
 
@@ -1141,7 +1151,8 @@ const mainMenu = (lang, activity = 'hlavni') => {
     .text(m.summary, 'summary').text(m.tax, 'calc_tax').row()
     .text(m.entries, 'entries').row()
     .text(actLabel, 'toggle_activity').row()
-    .text(m.help,    'help').text(m.lang, 'toggle_lang').row();
+    .text(m.help, 'help').text(m.feedback, 'feedback').row()
+    .text(m.lang, 'toggle_lang').row();
 };
 
 const yearPicker = (action) =>
@@ -1177,6 +1188,7 @@ function afterSaveKeyboard(lang, type) {
 bot.command('start', async ctx => {
   await upsertUser(ctx.from);
   ctx.session.wizard = null;
+  ctx.session.awaitingFeedback = false;
   const lang = getLang(ctx);
   await ctx.reply(T[lang].welcome(sanitizeDesc(ctx.from.first_name || 'User')), { parse_mode: 'Markdown', reply_markup: mainMenu(lang, getActivity(ctx)) });
 });
@@ -1247,12 +1259,22 @@ async function askYear(ctx, action) {
 bot.callbackQuery('back_menu', async ctx => {
   await ctx.answerCallbackQuery();
   ctx.session.wizard = null;
+  ctx.session.awaitingFeedback = false;
   await ctx.reply('📋', { reply_markup: mainMenu(getLang(ctx), getActivity(ctx)) });
 });
 
 bot.callbackQuery('summary', ctx => { ctx.answerCallbackQuery(); askYear(ctx, 'sum'); });
 bot.callbackQuery('calc_tax', ctx => { ctx.answerCallbackQuery(); askYear(ctx, 'tax'); });
 bot.callbackQuery('help', ctx => { ctx.answerCallbackQuery(); showHelp(ctx); });
+
+// ── Feedback ──
+bot.callbackQuery('feedback', async ctx => {
+  await ctx.answerCallbackQuery();
+  const lang = getLang(ctx);
+  ctx.session.awaitingFeedback = true;
+  ctx.session.wizard = null;
+  await ctx.reply(T[lang].feedbackPrompt, { parse_mode: 'Markdown' });
+});
 
 // ── Year pickers ──
 for (const y of [2024, 2025, 2026]) {
@@ -1578,6 +1600,22 @@ bot.on('message:text', async ctx => {
 
   const lang = getLang(ctx);
   const t = T[lang];
+
+  // ── Feedback mode: forward message to admin ──
+  if (ctx.session.awaitingFeedback) {
+    ctx.session.awaitingFeedback = false;
+    if (ADMIN_ID) {
+      try {
+        const from = ctx.from;
+        const header = `💬 *Feedback from* @${sanitizeDesc(from.username || '')} (${sanitizeDesc(from.first_name || '')}, ID: ${from.id}):\n\n`;
+        await bot.api.sendMessage(ADMIN_ID, header + sanitizeDesc(text), { parse_mode: 'Markdown' });
+      } catch (err) {
+        console.error('Feedback forward error:', err);
+      }
+    }
+    return ctx.reply(t.feedbackSent, { reply_markup: mainMenu(lang, getActivity(ctx)) });
+  }
+
   const wiz = ctx.session.wizard;
 
   // ── Wizard: awaiting amount ──
