@@ -1206,6 +1206,79 @@ bot.command('start', async ctx => {
 bot.command('prehled', ctx => askYear(ctx, 'sum'));
 bot.command('dane',    ctx => askYear(ctx, 'tax'));
 bot.command('help',    showHelp);
+
+// ── /stats — admin-only dashboard ──
+bot.command('stats', async ctx => {
+  if (!ADMIN_ID || String(ctx.from.id) !== String(ADMIN_ID)) {
+    return; // Silently ignore for non-admins
+  }
+  try {
+    const { rows: totals } = await query(`
+      SELECT
+        (SELECT COUNT(*) FROM users) AS total_users,
+        (SELECT COUNT(DISTINCT user_id) FROM income) AS users_with_income,
+        (SELECT COUNT(DISTINCT user_id) FROM expenses) AS users_with_expenses,
+        (SELECT COUNT(*) FROM income) AS total_income_entries,
+        (SELECT COUNT(*) FROM expenses) AS total_expense_entries,
+        (SELECT COALESCE(SUM(amount), 0) FROM income) AS total_income_value,
+        (SELECT COALESCE(SUM(amount), 0) FROM expenses) AS total_expense_value
+    `);
+
+    const { rows: recent } = await query(`
+      SELECT first_name, username, telegram_id, id
+      FROM users
+      ORDER BY id DESC
+      LIMIT 10
+    `);
+
+    const { rows: weekActive } = await query(`
+      SELECT COUNT(DISTINCT user_id) AS cnt FROM (
+        SELECT user_id FROM income WHERE date > NOW() - INTERVAL '7 days'
+        UNION
+        SELECT user_id FROM expenses WHERE date > NOW() - INTERVAL '7 days'
+      ) sub
+    `);
+
+    const { rows: monthActive } = await query(`
+      SELECT COUNT(DISTINCT user_id) AS cnt FROM (
+        SELECT user_id FROM income WHERE date > NOW() - INTERVAL '30 days'
+        UNION
+        SELECT user_id FROM expenses WHERE date > NOW() - INTERVAL '30 days'
+      ) sub
+    `);
+
+    const t = totals[0];
+    const activeUsers = Math.max(parseInt(t.users_with_income), parseInt(t.users_with_expenses));
+    const totalEntries = parseInt(t.total_income_entries) + parseInt(t.total_expense_entries);
+
+    let text = `📊 *Bot Stats*\n━━━━━━━━━━━━━━━━━━━\n\n`;
+    text += `👥 *Users*\n`;
+    text += `• Total signups: *${t.total_users}*\n`;
+    text += `• Active (any entries): *${activeUsers}*\n`;
+    text += `• Active this week: *${weekActive[0].cnt}*\n`;
+    text += `• Active this month: *${monthActive[0].cnt}*\n\n`;
+    text += `📝 *Entries*\n`;
+    text += `• Total: *${totalEntries}*\n`;
+    text += `• Income: ${t.total_income_entries} entries (${czk(parseFloat(t.total_income_value))})\n`;
+    text += `• Expenses: ${t.total_expense_entries} entries (${czk(parseFloat(t.total_expense_value))})\n\n`;
+    text += `🆕 *Recent signups (last 10)*\n`;
+    for (const u of recent) {
+      const name = sanitizeDesc(u.first_name || 'unknown');
+      const handle = u.username ? `@${sanitizeDesc(u.username)}` : `id:${u.telegram_id}`;
+      text += `• ${name} (${handle})\n`;
+    }
+
+    try {
+      await ctx.reply(text, { parse_mode: 'Markdown' });
+    } catch (mdErr) {
+      await ctx.reply(text);
+    }
+  } catch (err) {
+    console.error('Stats error:', err);
+    await ctx.reply('❌ Stats error: ' + err.message);
+  }
+});
+
 bot.command('info',    async ctx => {
   const lang = getLang(ctx);
   const disclaimer = lang === 'cs'
