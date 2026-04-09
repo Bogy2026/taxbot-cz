@@ -1279,6 +1279,30 @@ bot.command('stats', async ctx => {
   }
 });
 
+// ── /reply <userId> <message> — admin-only reply to feedback ──
+bot.command('reply', async ctx => {
+  if (!ADMIN_ID || String(ctx.from.id) !== String(ADMIN_ID)) {
+    return; // Silent for non-admins
+  }
+  const raw = ctx.message.text.replace(/^\/reply(@\w+)?\s*/i, '').trim();
+  const match = raw.match(/^(\d+)\s+([\s\S]+)$/);
+  if (!match) {
+    return ctx.reply('Usage: `/reply <userId> <message>`\nExample: `/reply 123456789 Thanks for the feedback!`', { parse_mode: 'Markdown' });
+  }
+  const targetId = Number(match[1]);
+  const message = match[2];
+
+  try {
+    const header = `💬 *Reply from developer:*\n━━━━━━━━━━━━━━━━\n`;
+    await bot.api.sendMessage(targetId, header + message, { parse_mode: 'Markdown' });
+    await ctx.reply(`✅ Sent to ${targetId}`);
+    console.log(`📤 Admin reply sent to ${targetId}`);
+  } catch (err) {
+    console.error('Reply error:', err);
+    await ctx.reply(`❌ Failed: ${err.description || err.message}\n\nThe user may have blocked the bot or never started a chat with it.`);
+  }
+});
+
 bot.command('info',    async ctx => {
   const lang = getLang(ctx);
   const disclaimer = lang === 'cs'
